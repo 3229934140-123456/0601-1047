@@ -2,6 +2,14 @@ let currentStatus = 'want_to_watch';
 let currentItem = null;
 let editingTags = [];
 let editingRating = 0;
+let privacyMode = false;
+
+function maskText(text, showLength = 0) {
+  if (!text) return '••••••';
+  const str = String(text);
+  if (showLength > 0 && str.length <= showLength) return '•'.repeat(str.length);
+  return '•'.repeat(Math.max(6, Math.min(12, str.length)));
+}
 
 function showToast(message) {
   const existing = document.querySelector('.toast');
@@ -14,6 +22,9 @@ function showToast(message) {
 }
 
 function renderStars(rating, editable = true, containerId = '') {
+  if (privacyMode && !editable) {
+    return '<span style="color:#9ca3af;">•••••</span>';
+  }
   let html = `<div class="star-rating ${editable ? 'reverse' : ''}" ${containerId ? `id="${containerId}"` : ''} style="flex-direction:row-reverse;display:inline-flex">`;
   for (let i = 5; i >= 1; i--) {
     const filled = i <= rating;
@@ -25,36 +36,47 @@ function renderStars(rating, editable = true, containerId = '') {
 
 function renderTags(tags, editable = false) {
   if (!tags || !tags.length) return '';
+  if (privacyMode && !editable) {
+    return `<span class="tag">••••</span>`;
+  }
   return tags.map(tag => `
-    <span class="tag">${tag}${editable ? `<span class="tag-remove" data-tag="${tag}">×</span>` : ''}</span>
+    <span class="tag">${editable ? tag : (privacyMode ? '••••' : tag)}${editable ? `<span class="tag-remove" data-tag="${tag}">×</span>` : ''}</span>
   `).join('');
 }
 
 function renderCurrentVideoCard(item, videoInfo) {
-  const progressPercent = item.duration > 0 ? Math.min(100, (item.progress / item.duration) * 100) : 0;
+  const progressPercent = privacyMode ? 0 : (item.duration > 0 ? Math.min(100, (item.progress / item.duration) * 100) : 0);
+  const displayTitle = privacyMode ? maskText(item.title) : item.title;
+  const displayPlatform = privacyMode ? '🏠 ••••' : (item.platform ? '🏠 ' + item.platform : '');
+  const displaySeason = privacyMode ? '' : (item.season ? ' · 第' + item.season + '季' : '');
+  const displayEpisode = privacyMode ? '' : (item.episode ? ' · 第' + item.episode + '集' : '');
+  const displayRating = privacyMode ? '' : (item.rating ? ' · <span style="color:#f59e0b">' + '★'.repeat(item.rating) + '</span>' : '');
+  const displayProgress = privacyMode ? '••:•• / ••:••' : `⏱ ${formatTime(item.progress)} / ${formatTime(item.duration)}`;
+  const displayPercent = privacyMode ? '••%' : `${progressPercent.toFixed(0)}%`;
+  const privacyBadge = privacyMode ? ' <span style="font-size:11px;padding:1px 6px;background:#fef3c7;color:#92400e;border-radius:4px;">🔒 隐私模式</span>' : '';
   return `
     <div class="video-card">
       <div class="video-card-header">
-        <div class="video-card-title">${item.title}</div>
+        <div class="video-card-title">${displayTitle}${privacyBadge}</div>
         <span class="status-badge status-${item.status}">${STATUS_LABELS[item.status]}</span>
       </div>
       <div class="video-card-meta">
-        ${item.platform ? '🏠 ' + item.platform : ''}
-        ${item.season ? ' · 第' + item.season + '季' : ''}
-        ${item.episode ? ' · 第' + item.episode + '集' : ''}
-        ${item.rating ? ' · <span style="color:#f59e0b">' + '★'.repeat(item.rating) + '</span>' : ''}
+        ${displayPlatform}
+        ${displaySeason}
+        ${displayEpisode}
+        ${displayRating}
       </div>
       <div class="progress-info">
-        <span>⏱ ${formatTime(item.progress)} / ${formatTime(item.duration)}</span>
-        <span style="margin-left:auto">${progressPercent.toFixed(0)}%</span>
+        <span>${displayProgress}</span>
+        <span style="margin-left:auto">${displayPercent}</span>
       </div>
       <div class="progress-bar" style="margin-top:6px">
         <div class="progress-bar-fill" style="width:${progressPercent}%"></div>
       </div>
       <div class="video-card-actions">
         <button class="btn btn-secondary btn-sm" id="current-edit-btn">编辑</button>
-        <button class="btn btn-secondary btn-sm" id="current-copy-btn">分享</button>
-        <button class="btn btn-primary btn-sm" id="current-sync-btn">同步进度</button>
+        <button class="btn btn-secondary btn-sm" id="current-copy-btn" ${privacyMode ? 'disabled' : ''}>分享</button>
+        <button class="btn btn-primary btn-sm" id="current-sync-btn" ${privacyMode ? 'disabled' : ''}>同步进度</button>
       </div>
     </div>
   `;
@@ -63,21 +85,25 @@ function renderCurrentVideoCard(item, videoInfo) {
 function renderItemRow(item) {
   const icon = item.status === 'completed' ? '✅' : item.status === 'watching' ? '▶️' : '📌';
   const subtitleParts = [];
-  if (item.platform) subtitleParts.push(item.platform);
-  if (item.season || item.episode) {
-    const ep = [];
-    if (item.season) ep.push('S' + item.season);
-    if (item.episode) ep.push('E' + item.episode);
-    subtitleParts.push(ep.join(''));
+  if (!privacyMode) {
+    if (item.platform) subtitleParts.push(item.platform);
+    if (item.season || item.episode) {
+      const ep = [];
+      if (item.season) ep.push('S' + item.season);
+      if (item.episode) ep.push('E' + item.episode);
+      subtitleParts.push(ep.join(''));
+    }
+    if (item.rating) subtitleParts.push('★'.repeat(item.rating));
+    if (item.lastWatchedAt) subtitleParts.push('最近: ' + formatDate(item.lastWatchedAt));
+  } else {
+    subtitleParts.push('🔒 隐私模式');
   }
-  if (item.rating) subtitleParts.push('★'.repeat(item.rating));
-  if (item.lastWatchedAt) subtitleParts.push('最近: ' + formatDate(item.lastWatchedAt));
 
   return `
     <div class="item-row" data-id="${item.id}">
       <div class="item-row-icon">${icon}</div>
       <div class="item-row-content">
-        <div class="item-row-title">${item.title}</div>
+        <div class="item-row-title">${privacyMode ? maskText(item.title) : item.title}</div>
         <div class="item-row-subtitle">${subtitleParts.join(' · ')}</div>
       </div>
       <div class="item-row-actions">
@@ -211,6 +237,28 @@ function openItemModal(item) {
   editingRating = item.rating || 0;
 
   const modal = document.getElementById('item-modal');
+
+  if (privacyMode) {
+    document.getElementById('modal-title').textContent = '🔒 隐私模式';
+    document.getElementById('modal-body').innerHTML = `
+      <div style="text-align:center;padding:40px 20px;">
+        <div style="font-size:48px;margin-bottom:16px;opacity:0.5;">🔒</div>
+        <div style="font-size:16px;font-weight:600;margin-bottom:8px;">隐私模式已开启</div>
+        <div style="color:var(--text-secondary);font-size:14px;line-height:1.6;margin-bottom:24px;">
+          当前处于隐私模式，所有敏感内容已被隐藏。<br>
+          请先在「设置 → 隐私设置」中关闭隐私模式，<br>
+          然后再进行编辑操作。
+        </div>
+        <button class="btn btn-primary" id="privacy-close-modal">知道了</button>
+      </div>
+    `;
+    modal.style.display = 'flex';
+    document.getElementById('privacy-close-modal').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+    return;
+  }
+
   document.getElementById('modal-title').textContent = item.title || '编辑条目';
 
   const bookmarksHtml = (item.bookmarks || []).map(bm => `
@@ -537,6 +585,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('item-modal').addEventListener('click', (e) => {
     if (e.target.id === 'item-modal') {
       document.getElementById('item-modal').style.display = 'none';
+    }
+  });
+
+  async function loadPrivacySetting() {
+    const settings = await getSettings();
+    const oldPrivacy = privacyMode;
+    privacyMode = settings.privacyMode === true;
+    if (oldPrivacy !== privacyMode) {
+      refreshAllTabs();
+    }
+  }
+
+  loadPrivacySetting();
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.tracker_settings) {
+      loadPrivacySetting();
     }
   });
 

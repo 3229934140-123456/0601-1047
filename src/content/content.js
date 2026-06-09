@@ -13,6 +13,16 @@
   let currentTags = [];
   let currentStatus = STATUS.WATCHING;
   let currentRating = 0;
+  let privacyMode = false;
+  let siteRules = [];
+  let settingsLoaded = false;
+
+  function maskText(text, showLength = 0) {
+    if (!text) return '••••••';
+    const str = String(text);
+    if (showLength > 0 && str.length <= showLength) return '•'.repeat(str.length);
+    return '•'.repeat(Math.max(6, Math.min(12, str.length)));
+  }
 
   function formatTime(seconds) {
     if (!seconds || isNaN(seconds)) return '00:00';
@@ -44,59 +54,126 @@
   function detectVideoInfo() {
     const hostname = location.hostname;
     const url = location.href;
-    const platform = getPlatformName(hostname);
+
+    const matchedRule = (siteRules || []).find(rule => {
+      if (!rule || !rule.enabled || !rule.match) return false;
+      return rule.match.some(m => hostname.includes(m.replace(/\./g, '\\.').replace(/\*/g, '.*')) ||
+        hostname.includes(m));
+    });
+
+    const platform = matchedRule ? matchedRule.name : getPlatformName(hostname);
 
     let title = '';
-    const titleSelectors = [
-      'h1',
-      '.video-title',
-      '.media-title',
-      '.movie-title',
-      '.player_title',
-      '[data-uia="video-title"]',
-      '#title h1',
-      '.title'
-    ];
-    for (const sel of titleSelectors) {
-      const el = document.querySelector(sel);
-      if (el && el.textContent && el.textContent.trim().length > 0) {
-        title = el.textContent.trim();
-        if (title.length > 3) break;
+    if (matchedRule && matchedRule.titleSelector) {
+      const selectors = Array.isArray(matchedRule.titleSelector)
+        ? matchedRule.titleSelector
+        : matchedRule.titleSelector.split(',').map(s => s.trim()).filter(Boolean);
+      for (const sel of selectors) {
+        try {
+          const el = document.querySelector(sel);
+          if (el && el.textContent && el.textContent.trim().length > 0) {
+            title = el.textContent.trim();
+            if (title.length > 3) break;
+          }
+        } catch (e) {
+          console.warn('Invalid selector:', sel, e);
+        }
+      }
+    }
+
+    if (!title) {
+      const defaultTitleSelectors = [
+        'h1',
+        '.video-title',
+        '.media-title',
+        '.movie-title',
+        '.player_title',
+        '[data-uia="video-title"]',
+        '#title h1',
+        '.title'
+      ];
+      for (const sel of defaultTitleSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.textContent && el.textContent.trim().length > 0) {
+          title = el.textContent.trim();
+          if (title.length > 3) break;
+        }
       }
     }
     if (!title) title = document.title;
 
     let season = null;
     let episode = null;
-    const epPatterns = [
-      /第\s*(\d+)\s*[季集]/g,
-      /Season\s*(\d+)/i,
-      /Episode\s*(\d+)/i,
-      /S(\d+)E(\d+)/i,
-      /(\d+)话/,
-      /(\d+)集/
-    ];
-    const titleText = title + ' ' + document.title;
-    for (const pat of epPatterns) {
-      let match;
-      while ((match = pat.exec(titleText)) !== null) {
-        if (match[0].includes('季') || match[0].toLowerCase().includes('season') || match[0].match(/^S\d+/i)) {
-          season = parseInt(match[1]);
-        } else if (match[2] && match[0].match(/^S\d+E\d+/i)) {
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else {
-          episode = parseInt(match[1]);
+    if (matchedRule && matchedRule.episodeSelector) {
+      try {
+        const epSelectors = Array.isArray(matchedRule.episodeSelector)
+          ? matchedRule.episodeSelector
+          : matchedRule.episodeSelector.split(',').map(s => s.trim()).filter(Boolean);
+        for (const sel of epSelectors) {
+          try {
+            const el = document.querySelector(sel);
+            if (el && el.textContent) {
+              const epText = el.textContent;
+              const sMatch = epText.match(/第\s*(\d+)\s*季|Season\s*(\d+)/i);
+              const eMatch = epText.match(/第\s*(\d+)\s*集|Episode\s*(\d+)|第\s*(\d+)\s*话|(\d+)\s*[集话]/i);
+              const seMatch = epText.match(/S(\d+)E(\d+)/i);
+              if (seMatch) {
+                season = parseInt(seMatch[1]);
+                episode = parseInt(seMatch[2]);
+              } else {
+                if (sMatch) season = parseInt(sMatch[1] || sMatch[2]);
+                if (eMatch) episode = parseInt(eMatch[1] || eMatch[2] || eMatch[3] || eMatch[4]);
+              }
+              if (season || episode) break;
+            }
+          } catch (e) {
+            console.warn('Invalid episode selector:', sel, e);
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!season && !episode) {
+      const epPatterns = [
+        /第\s*(\d+)\s*[季集]/g,
+        /Season\s*(\d+)/i,
+        /Episode\s*(\d+)/i,
+        /S(\d+)E(\d+)/i,
+        /(\d+)话/,
+        /(\d+)集/
+      ];
+      const titleText = title + ' ' + document.title;
+      for (const pat of epPatterns) {
+        let match;
+        while ((match = pat.exec(titleText)) !== null) {
+          if (match[0].includes('季') || match[0].toLowerCase().includes('season') || match[0].match(/^S\d+/i)) {
+            season = parseInt(match[1]);
+          } else if (match[2] && match[0].match(/^S\d+E\d+/i)) {
+            season = parseInt(match[1]);
+            episode = parseInt(match[2]);
+          } else {
+            episode = parseInt(match[1]);
+          }
         }
       }
     }
 
-    const video = document.querySelector('video');
     let progress = 0;
     let duration = 0;
-    if (video) {
-      progress = video.currentTime || 0;
-      duration = video.duration || 0;
+    let videoEl = null;
+    if (matchedRule && matchedRule.progressSelector) {
+      try {
+        videoEl = document.querySelector(matchedRule.progressSelector);
+      } catch (e) {
+        console.warn('Invalid progress selector:', matchedRule.progressSelector, e);
+      }
+    }
+    if (!videoEl) {
+      videoEl = document.querySelector('video');
+    }
+    if (videoEl) {
+      progress = videoEl.currentTime || 0;
+      duration = videoEl.duration || 0;
     }
 
     return {
@@ -108,7 +185,8 @@
       episode,
       progress,
       duration,
-      hostname
+      hostname,
+      matchedRuleId: matchedRule?.id || null
     };
   }
 
@@ -141,6 +219,9 @@
   }
 
   function renderStars(rating, interactive = true) {
+    if (privacyMode && !interactive) {
+      return '<span style="color:#9ca3af;font-size:14px;">•••••</span>';
+    }
     let html = `<div class="mt-rating ${interactive ? 'reverse' : ''}" style="flex-direction:row-reverse;display:inline-flex">`;
     for (let i = 5; i >= 1; i--) {
       const filled = i <= rating;
@@ -152,6 +233,9 @@
 
   function renderTags() {
     if (!currentTags.length) return '';
+    if (privacyMode) {
+      return `<span class="mt-tag">••••<span class="mt-tag-remove" data-tag="__privacy__">×</span></span>`;
+    }
     return currentTags.map(tag =>
       `<span class="mt-tag">${tag}<span class="mt-tag-remove" data-tag="${tag}">×</span></span>`
     ).join('');
@@ -159,6 +243,15 @@
 
   function renderBookmarks() {
     if (!currentItem?.bookmarks?.length) return '<div style="color:#9ca3af;font-size:12px">暂无收藏片段</div>';
+    if (privacyMode) {
+      return currentItem.bookmarks.map((bm, idx) => `
+        <div class="mt-bookmark-item">
+          <span class="mt-bookmark-time" data-time="${bm.time}">••:••</span>
+          <span class="mt-bookmark-note">••••••</span>
+          <button class="mt-bookmark-remove" data-bookmark-id="${bm.id}">×</button>
+        </div>
+      `).join('');
+    }
     return currentItem.bookmarks.map(bm => `
       <div class="mt-bookmark-item">
         <span class="mt-bookmark-time" data-time="${bm.time}">${formatTime(bm.time)}</span>
@@ -170,12 +263,20 @@
 
   function renderReminders() {
     if (!currentItem?.reminders?.length) return '';
-    return `<div class="mt-reminder-list">${currentItem.reminders.map(rem => `
-      <div class="mt-reminder-item">
-        <span>📅 ${new Date(rem.time).toLocaleString('zh-CN')} - ${rem.note || '下集提醒'}</span>
-        <button class="mt-reminder-remove" data-reminder-id="${rem.id}">×</button>
-      </div>
-    `).join('')}</div>`;
+    const reminderContent = privacyMode
+      ? currentItem.reminders.map(rem => `
+          <div class="mt-reminder-item">
+            <span>📅 •••••••• - ••••</span>
+            <button class="mt-reminder-remove" data-reminder-id="${rem.id}">×</button>
+          </div>
+        `).join('')
+      : currentItem.reminders.map(rem => `
+          <div class="mt-reminder-item">
+            <span>📅 ${new Date(rem.time).toLocaleString('zh-CN')} - ${rem.note || '下集提醒'}</span>
+            <button class="mt-reminder-remove" data-reminder-id="${rem.id}">×</button>
+          </div>
+        `).join('');
+    return `<div class="mt-reminder-list">${reminderContent}</div>`;
   }
 
   function renderPanel() {
@@ -190,29 +291,43 @@
       ? Math.min(100, (videoInfo.progress / videoInfo.duration) * 100)
       : (item.progress && item.duration ? Math.min(100, (item.progress / item.duration) * 100) : 0);
 
+    const displayTitle = privacyMode ? maskText(videoInfo.title || '未识别到视频标题') : (videoInfo.title || '未识别到视频标题');
+    const displayPlatform = privacyMode ? '🏠 ••••' : (videoInfo.platform ? '🏠 ' + videoInfo.platform : '');
+    const displaySeason = privacyMode ? '' : (videoInfo.season ? ' · 第' + videoInfo.season + '季' : '');
+    const displayEpisode = privacyMode ? '' : (videoInfo.episode ? ' · 第' + videoInfo.episode + '集' : '');
+    const displayProgress = privacyMode ? '••:•• / ••:••' : `${formatTime(videoInfo.progress || item.progress)} / ${formatTime(videoInfo.duration || item.duration)}`;
+    const displayProgressPercent = privacyMode ? 0 : progressPercent;
+    const displayReview = privacyMode ? '' : (item.review || '');
+    const displayReviewPlaceholder = privacyMode ? '（隐私模式已开启）' : '写下你的观后感...';
+    const displaySeasonValue = privacyMode ? '' : (item.season || videoInfo.season || '');
+    const displayEpisodeValue = privacyMode ? '' : (item.episode || videoInfo.episode || '');
+    const displayTagPlaceholder = privacyMode ? '（隐私模式已开启）' : '输入标签后按回车';
+    const displayBookmarkPlaceholder = privacyMode ? '（隐私模式已开启）' : '片段备注（可选）';
+    const privacyBadge = privacyMode ? '<span style="margin-left:8px;padding:1px 6px;background:rgba(255,255,255,0.2);border-radius:4px;font-size:11px;">🔒 隐私模式</span>' : '';
+
     overlayContainer.innerHTML = `
       <div class="mt-panel">
         <div class="mt-panel-header">
-          <span class="mt-panel-title">影视追踪</span>
+          <span class="mt-panel-title">影视追踪${privacyBadge}</span>
           <button class="mt-panel-close">×</button>
         </div>
         <div class="mt-panel-body">
           <div class="mt-video-info">
-            <div class="mt-video-title">${videoInfo.title || '未识别到视频标题'}</div>
+            <div class="mt-video-title">${displayTitle}</div>
             <div class="mt-video-meta">
-              ${videoInfo.platform ? '🏠 ' + videoInfo.platform : ''}
-              ${videoInfo.season ? ' · 第' + videoInfo.season + '季' : ''}
-              ${videoInfo.episode ? ' · 第' + videoInfo.episode + '集' : ''}
+              ${displayPlatform}
+              ${displaySeason}
+              ${displayEpisode}
             </div>
           </div>
 
           <div class="mt-progress-section">
             <div class="mt-progress-label">
               <span>播放进度</span>
-              <span>${formatTime(videoInfo.progress || item.progress)} / ${formatTime(videoInfo.duration || item.duration)}</span>
+              <span>${displayProgress}</span>
             </div>
             <div class="mt-progress-bar">
-              <div class="mt-progress-fill" style="width:${progressPercent}%"></div>
+              <div class="mt-progress-fill" style="width:${displayProgressPercent}%"></div>
             </div>
           </div>
 
@@ -228,16 +343,16 @@
           <div class="mt-section-title">标签</div>
           <div class="mt-tags-input">
             ${renderTags()}
-            <input type="text" id="mt-tag-input" placeholder="输入标签后按回车">
+            <input type="text" id="mt-tag-input" placeholder="${displayTagPlaceholder}" ${privacyMode ? 'disabled' : ''}>
           </div>
 
           <div class="mt-section-title">短评</div>
-          <textarea class="mt-textarea" id="mt-review-input" placeholder="写下你的观后感...">${item.review || ''}</textarea>
+          <textarea class="mt-textarea" id="mt-review-input" placeholder="${displayReviewPlaceholder}" ${privacyMode ? 'disabled' : ''}>${displayReview}</textarea>
 
           <div class="mt-section-title">季/集信息</div>
           <div class="mt-form-row">
-            <input type="number" class="mt-input" id="mt-season-input" placeholder="季" value="${item.season || videoInfo.season || ''}" min="1">
-            <input type="number" class="mt-input" id="mt-episode-input" placeholder="集" value="${item.episode || videoInfo.episode || ''}" min="1">
+            <input type="number" class="mt-input" id="mt-season-input" placeholder="季" value="${displaySeasonValue}" min="1" ${privacyMode ? 'disabled' : ''}>
+            <input type="number" class="mt-input" id="mt-episode-input" placeholder="集" value="${displayEpisodeValue}" min="1" ${privacyMode ? 'disabled' : ''}>
           </div>
 
           <div class="mt-section-title">收藏片段</div>
@@ -245,24 +360,24 @@
             ${renderBookmarks()}
           </div>
           <div class="mt-form-row">
-            <input type="text" class="mt-input" id="mt-bookmark-note" placeholder="片段备注（可选）">
-            <button class="mt-btn mt-btn-secondary" id="mt-add-bookmark" style="flex:0 0 auto">收藏当前时间点</button>
+            <input type="text" class="mt-input" id="mt-bookmark-note" placeholder="${displayBookmarkPlaceholder}" ${privacyMode ? 'disabled' : ''}>
+            <button class="mt-btn mt-btn-secondary" id="mt-add-bookmark" style="flex:0 0 auto" ${privacyMode ? 'disabled' : ''}>收藏当前时间点</button>
           </div>
 
           <div class="mt-section-title">下集提醒</div>
           ${renderReminders()}
           <div class="mt-form-row">
-            <input type="datetime-local" class="mt-input" id="mt-reminder-time">
-            <button class="mt-btn mt-btn-secondary" id="mt-add-reminder" style="flex:0 0 auto">设置提醒</button>
+            <input type="datetime-local" class="mt-input" id="mt-reminder-time" ${privacyMode ? 'disabled' : ''}>
+            <button class="mt-btn mt-btn-secondary" id="mt-add-reminder" style="flex:0 0 auto" ${privacyMode ? 'disabled' : ''}>设置提醒</button>
           </div>
 
           <div class="mt-button-row">
-            <button class="mt-btn mt-btn-secondary" id="mt-copy-card">复制分享卡片</button>
+            <button class="mt-btn mt-btn-secondary" id="mt-copy-card" ${privacyMode ? 'disabled' : ''}>复制分享卡片</button>
             <button class="mt-btn mt-btn-primary" id="mt-save-btn">保存进度</button>
           </div>
         </div>
       </div>
-      <button class="mt-fab" title="影视追踪">📺</button>
+      <button class="mt-fab" title="影视追踪">${privacyMode ? '🔒' : '📺'}</button>
     `;
     bindPanelEvents();
   }
@@ -510,11 +625,42 @@
     overlayContainer.querySelector('.mt-panel').style.display = 'none';
   }
 
-  function init() {
-    chrome.storage.local.get(['tracker_settings'], (result) => {
+  function loadSettings() {
+    chrome.storage.local.get(['tracker_settings', 'tracker_site_rules'], (result) => {
       const settings = result.tracker_settings || {};
+      const oldPrivacy = privacyMode;
+      privacyMode = settings.privacyMode === true;
+
+      if (result.tracker_site_rules && Array.isArray(result.tracker_site_rules)) {
+        siteRules = result.tracker_site_rules;
+      }
+
+      settingsLoaded = true;
+
       if (settings.showOverlay !== false) {
-        createOverlay();
+        if (!overlayContainer) {
+          createOverlay();
+        } else {
+          overlayContainer.style.display = '';
+          if (oldPrivacy !== privacyMode) {
+            renderPanel();
+            overlayContainer.querySelector('.mt-panel').style.display = panelVisible ? 'block' : 'none';
+          }
+        }
+      } else if (overlayContainer) {
+        overlayContainer.style.display = 'none';
+      }
+    });
+  }
+
+  function init() {
+    loadSettings();
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local') {
+        if (changes.tracker_settings || changes.tracker_site_rules) {
+          loadSettings();
+        }
       }
     });
 

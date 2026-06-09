@@ -244,12 +244,17 @@ async function viewHistory() {
   const history = await getHistory();
   const container = document.getElementById('history-list');
 
-  if (!history.length) {
-    container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">暂无历史记录</div>';
+  if (!history || !history.length) {
+    container.innerHTML = `
+      <div class="empty-history" style="text-align:center;padding:40px 20px;">
+        <div style="font-size:48px;opacity:0.3;margin-bottom:12px;">📭</div>
+        <div style="color:var(--text-muted);font-size:14px;">暂无历史记录</div>
+      </div>`;
   } else {
     const typeIcons = { add: '➕', update: '✏️', delete: '🗑️' };
     const typeLabels = { add: '添加', update: '更新', delete: '删除' };
-    container.innerHTML = history.map(h => `
+    const safeHistory = Array.isArray(history) ? history : [];
+    container.innerHTML = safeHistory.map(h => `
       <div class="history-item">
         <span class="history-item-icon">${typeIcons[h.type] || '📝'}</span>
         <div class="history-item-content">
@@ -263,10 +268,23 @@ async function viewHistory() {
   document.getElementById('history-modal').style.display = 'flex';
 }
 
-async function clearHistory() {
-  if (!confirm('确定要清除所有历史记录吗？')) return;
-  await clearHistory();
-  showToast('历史记录已清除');
+async function handleClearHistory() {
+  if (!confirm('确定要清除所有历史记录吗？此操作不可撤销。')) return;
+  try {
+    const { clearHistory: doClearHistory } = window;
+    if (typeof doClearHistory === 'function') {
+      await doClearHistory();
+    } else {
+      await setStorage('tracker_history', []);
+    }
+    showToast('历史记录已清除');
+    if (document.getElementById('history-modal').style.display === 'flex') {
+      await viewHistory();
+    }
+  } catch (e) {
+    console.error('清除历史失败:', e);
+    showToast('清除失败，请重试');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -302,7 +320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('clear-all-btn').addEventListener('click', clearAllData);
 
   document.getElementById('view-history-btn').addEventListener('click', viewHistory);
-  document.getElementById('clear-history-btn').addEventListener('click', clearHistory);
+  document.getElementById('clear-history-btn').addEventListener('click', handleClearHistory);
   document.getElementById('history-modal-close').addEventListener('click', () => {
     document.getElementById('history-modal').style.display = 'none';
   });
