@@ -1,5 +1,6 @@
 let allItems = [];
 let currentView = 'grid';
+let reviewRange = 'week';
 let editingItem = null;
 
 function showToast(message) {
@@ -502,27 +503,239 @@ async function openDetailModal(item) {
   modal.style.display = 'flex';
 }
 
+function setView(view) {
+  currentView = view;
+  const itemsContainer = document.getElementById('items-container');
+  const emptyState = document.getElementById('empty-state');
+  const reviewContainer = document.getElementById('review-container');
+  const filterBar = document.querySelector('.filter-bar');
+  const statsBar = document.querySelector('.stats-bar');
+
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.querySelector(`.view-btn[data-view="${view}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  if (view === 'review') {
+    itemsContainer.style.display = 'none';
+    emptyState.style.display = 'none';
+    reviewContainer.style.display = 'block';
+    if (filterBar) filterBar.style.display = 'none';
+    renderReview();
+  } else {
+    itemsContainer.style.display = '';
+    reviewContainer.style.display = 'none';
+    if (filterBar) filterBar.style.display = '';
+    renderItems();
+  }
+}
+
+async function renderReview() {
+  const container = document.getElementById('review-container');
+  if (!container) return;
+
+  const items = getFilteredItems();
+  const now = Date.now();
+  const rangeMs = reviewRange === 'week' ? 7 * 24 * 3600 * 1000 : 30 * 24 * 3600 * 1000;
+  const rangeCutoff = now - rangeMs;
+  const staleDays = 14;
+  const staleCutoff = now - staleDays * 24 * 3600 * 1000;
+
+  if (!items.length) {
+    container.innerHTML = `
+      <div class="review-header">
+        <h2 class="review-title">📊 观看复盘</h2>
+        <div class="review-range">
+          <button class="btn btn-sm ${reviewRange==='week'?'btn-primary':'btn-secondary'}" data-range="week">本周</button>
+          <button class="btn btn-sm ${reviewRange==='month'?'btn-primary':'btn-secondary'}" data-range="month">本月</button>
+        </div>
+      </div>
+      <div class="empty-state" style="display:block;margin-top:60px;">
+        <div class="empty-state-icon">📭</div>
+        <div class="empty-state-text">${document.getElementById('search-input').value || 
+          Array.from(document.querySelectorAll('.select')).some(s=>s.value)
+          ? '当前筛选条件下没有作品，试试调整筛选'
+          : '还没有收藏任何作品，去追几部剧吧'}</div>
+      </div>
+    `;
+    bindReviewEvents(container);
+    return;
+  }
+
+  const platformMap = {};
+  let totalEpisodes = 0;
+  let recentlyWatched = [];
+  let staleShows = [];
+
+  items.forEach(item => {
+    if (item.platform) {
+      platformMap[item.platform] = (platformMap[item.platform] || 0) + 1;
+    } else {
+      platformMap['未标注'] = (platformMap['未标注'] || 0) + 1;
+    }
+    if (item.episode) totalEpisodes += Number(item.episode) || 0;
+    const lastWatched = item.lastWatchedAt || item.updatedAt || item.createdAt || 0;
+    if (lastWatched >= rangeCutoff) {
+      recentlyWatched.push(item);
+    }
+    if (item.status === 'watching' && lastWatched < staleCutoff) {
+      staleShows.push({ ...item, _staleDays: Math.floor((now - lastWatched) / (24 * 3600 * 1000)) });
+    }
+  });
+
+  recentlyWatched.sort((a, b) => (b.lastWatchedAt || b.updatedAt || 0) - (a.lastWatchedAt || a.updatedAt || 0));
+  staleShows.sort((a, b) => b._staleDays - a._staleDays);
+  recentlyWatched = recentlyWatched.slice(0, 10);
+  staleShows = staleShows.slice(0, 10);
+
+  const platformRows = Object.entries(platformMap)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => {
+      const pct = Math.round(count / items.length * 100);
+      return `
+        <div class="review-platform-row">
+          <span class="review-platform-name">${name}</span>
+          <div class="review-platform-bar">
+            <div class="review-platform-bar-fill" style="width:${pct}%"></div>
+          </div>
+          <span class="review-platform-count">${count} 部</span>
+        </div>
+      `;
+    }).join('');
+
+  const renderItemRow = (item, extra = '') => `
+    <div class="review-item-row" data-id="${item.id}">
+      <div class="review-item-main" data-action="detail">
+        <div class="review-item-title">
+          <span class="review-item-status">${getIconForStatus(item.status)}</span>
+          <span>${item.title || '未命名作品'}</span>
+          ${item.season || item.episode ? `<span class="review-item-season">S${item.season||0}E${item.episode||0}</span>` : ''}
+          ${item.rating ? `<span class="review-item-rating">${renderStars(item.rating)}</span>` : ''}
+        </div>
+        <div class="review-item-meta">
+          ${item.platform ? `<span>🏷 ${item.platform}</span>` : ''}
+          ${item.progress ? `<span>⏱ ${formatFieldValue('progress', item.progress)}</span>` : ''}
+          ${extra}
+        </div>
+      </div>
+      <div class="review-item-actions">
+        ${item.url ? `<a class="btn btn-sm btn-secondary" href="${item.url}" target="_blank" rel="noopener" title="打开原播放页">🔗</a>` : ''}
+        <button class="btn btn-sm btn-primary" data-action="detail" title="查看详情">详情</button>
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = `
+    <div class="review-header">
+      <h2 class="review-title">📊 观看复盘</h2>
+      <div class="review-range">
+        <button class="btn btn-sm ${reviewRange==='week'?'btn-primary':'btn-secondary'}" data-range="week">本周</button>
+        <button class="btn btn-sm ${reviewRange==='month'?'btn-primary':'btn-secondary'}" data-range="month">本月</button>
+      </div>
+    </div>
+
+    <div class="review-grid">
+      <div class="review-card">
+        <div class="review-card-title">🏷 平台分布</div>
+        <div class="review-card-subtitle">共 ${items.length} 部作品</div>
+        <div class="review-platform-list">
+          ${platformRows || '<div class="review-empty">暂无平台数据</div>'}
+        </div>
+      </div>
+
+      <div class="review-card">
+        <div class="review-card-title">📺 追剧进度</div>
+        <div class="review-stats">
+          <div class="review-stat">
+            <div class="review-stat-value">${totalEpisodes}</div>
+            <div class="review-stat-label">累计集数</div>
+          </div>
+          <div class="review-stat">
+            <div class="review-stat-value">${items.filter(i=>i.status==='watching').length}</div>
+            <div class="review-stat-label">在看作品</div>
+          </div>
+          <div class="review-stat">
+            <div class="review-stat-value">${recentlyWatched.length}</div>
+            <div class="review-stat-label">${reviewRange==='week'?'本周':'本月'}活跃</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="review-card">
+      <div class="review-card-title">🕒 ${reviewRange==='week'?'本周':'本月'}观看作品</div>
+      <div class="review-card-subtitle">最近 ${recentlyWatched.length} 条记录</div>
+      <div class="review-item-list">
+        ${recentlyWatched.length
+          ? recentlyWatched.map(it => renderItemRow(it, `<span>📅 ${new Date(it.lastWatchedAt||it.updatedAt).toLocaleDateString('zh-CN')}</span>`)).join('')
+          : `<div class="review-empty">${reviewRange==='week'?'本周':'本月'}还没有观看记录哦</div>`
+        }
+      </div>
+    </div>
+
+    <div class="review-card review-stale">
+      <div class="review-card-title">⚠️ 停更预警</div>
+      <div class="review-card-subtitle">在看但超过 ${staleDays} 天没更新的作品（${staleShows.length} 部）</div>
+      <div class="review-item-list">
+        ${staleShows.length
+          ? staleShows.map(it => renderItemRow(it, `<span style="color:var(--danger-color)">⏳ ${it._staleDays} 天未更新</span>`)).join('')
+          : `<div class="review-empty">所有在看作品都在活跃更新中，状态很棒 ✨</div>`
+        }
+      </div>
+    </div>
+  `;
+
+  bindReviewEvents(container);
+}
+
+function bindReviewEvents(container) {
+  container.querySelectorAll('[data-range]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      reviewRange = btn.dataset.range;
+      renderReview();
+    });
+  });
+
+  container.querySelectorAll('[data-action="detail"]').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      const row = e.currentTarget.closest('.review-item-row');
+      if (!row) return;
+      const id = row.dataset.id;
+      const item = await getItemById(id);
+      if (item) openDetailModal(item);
+    });
+  });
+}
+
 async function loadData() {
   allItems = await getItems();
   updateStats();
   populateFilters();
-  renderItems();
+  if (currentView === 'review') {
+    renderReview();
+  } else {
+    renderItems();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadData();
 
+  function refreshCurrentView() {
+    if (currentView === 'review') {
+      renderReview();
+    } else {
+      renderItems();
+    }
+  }
+
   ['search-input', 'filter-status', 'filter-platform', 'filter-rating', 'filter-tag', 'sort-by'].forEach(id => {
-    document.getElementById(id).addEventListener('input', renderItems);
-    document.getElementById(id).addEventListener('change', renderItems);
+    document.getElementById(id).addEventListener('input', refreshCurrentView);
+    document.getElementById(id).addEventListener('change', refreshCurrentView);
   });
 
   document.querySelectorAll('.view-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentView = btn.dataset.view;
-      renderItems();
+      setView(btn.dataset.view);
     });
   });
 
