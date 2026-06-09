@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "影视追踪 - Media Tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "在视频网站页面上顺手记录观看进度，支持标记状态、写短评、打星、添加标签、设置提醒等功能",
   "permissions": [
     "storage",

@@ -105,6 +105,19 @@
                 ➕ 添加自定义站点
               </button>
             </div>
+
+            <div class="setting-card" style="margin-top:16px">
+              <div class="setting-info">
+                <div class="setting-name">🧪 规则测试</div>
+                <div class="setting-desc">输入页面地址或直接测试当前标签页，查看识别结果和规则匹配详情</div>
+              </div>
+              <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+                <input type="text" class="input" id="test-url" placeholder="粘贴视频页面URL（可留空以测试当前活动标签页）" style="flex:1; min-width:260px;">
+                <button class="btn btn-secondary" id="test-current-tab">🔍 测试当前页</button>
+                <button class="btn btn-primary" id="test-rule-btn">运行测试</button>
+              </div>
+              <div id="test-result" style="margin-top:16px; display:none"></div>
+            </div>
           </div>
 
           <div class="settings-section" id="section-reminders" style="display:none;">
@@ -200,7 +213,7 @@
             <div class="setting-card about-card">
               <div class="about-logo">📺</div>
               <h3 class="about-title">影视追踪</h3>
-              <div class="about-version">版本 1.0.0</div>
+              <div class="about-version">版本 1.1.0</div>
               <p class="about-desc">
                 一个功能强大的浏览器扩展，帮助你在各大视频网站上轻松记录观看进度。
                 支持标记想看/在看/看完状态、写短评、打星、添加标签、设置下集提醒、

@@ -590,20 +590,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadPrivacySetting() {
     const settings = await getSettings();
-    const oldPrivacy = privacyMode;
     privacyMode = settings.privacyMode === true;
-    if (oldPrivacy !== privacyMode) {
-      refreshAllTabs();
-    }
   }
 
-  loadPrivacySetting();
+  (async function init() {
+    await loadPrivacySetting();
 
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.tracker_settings) {
-      loadPrivacySetting();
-    }
-  });
+    chrome.storage.onChanged.addListener(async (changes, area) => {
+      if (area === 'local' && changes.tracker_settings) {
+        const oldPrivacy = privacyMode;
+        await loadPrivacySetting();
+        if (oldPrivacy !== privacyMode) {
+          refreshAllTabs();
+        }
+      }
+    });
 
-  refreshAllTabs();
+    refreshAllTabs();
+  })();
 });

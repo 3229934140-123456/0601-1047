@@ -579,18 +579,25 @@
     const saveBtn = overlayContainer.querySelector('#mt-save-btn');
     if (saveBtn) {
       saveBtn.addEventListener('click', async () => {
-        const review = overlayContainer.querySelector('#mt-review-input')?.value || '';
-        const season = overlayContainer.querySelector('#mt-season-input')?.value || '';
-        const episode = overlayContainer.querySelector('#mt-episode-input')?.value || '';
         const videoInfo = detectVideoInfo();
 
         saveBtn.innerHTML = '<span class="mt-loading"></span>';
         saveBtn.disabled = true;
 
         if (!currentItem) currentItem = await getCurrentItem();
-        const res = await sendMessage('updateItem', {
-          id: currentItem.id,
-          updates: {
+
+        let updates;
+        if (privacyMode) {
+          updates = {
+            progress: videoInfo.progress || currentItem.progress,
+            duration: videoInfo.duration || currentItem.duration,
+            lastWatchedAt: Date.now()
+          };
+        } else {
+          const review = overlayContainer.querySelector('#mt-review-input')?.value || '';
+          const season = overlayContainer.querySelector('#mt-season-input')?.value || '';
+          const episode = overlayContainer.querySelector('#mt-episode-input')?.value || '';
+          updates = {
             status: currentStatus,
             rating: currentRating,
             tags: currentTags,
@@ -600,15 +607,21 @@
             progress: videoInfo.progress || currentItem.progress,
             duration: videoInfo.duration || currentItem.duration,
             lastWatchedAt: Date.now()
-          }
+          };
+        }
+
+        const res = await sendMessage('updateItem', {
+          id: currentItem.id,
+          updates,
+          isPartial: privacyMode
         });
 
-        saveBtn.innerHTML = '保存进度';
+        saveBtn.innerHTML = privacyMode ? '仅保存进度' : '保存进度';
         saveBtn.disabled = false;
 
         if (res.success) {
-          currentItem = res.item;
-          showToast('进度已保存');
+          currentItem = { ...currentItem, ...res.item };
+          showToast(privacyMode ? '进度已保存（隐私模式：其他字段未改动）' : '进度已保存');
         } else {
           showToast('保存失败');
         }

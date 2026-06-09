@@ -25,6 +25,91 @@ function renderStars(rating) {
   return '★'.repeat(rating) + '☆'.repeat(5 - rating);
 }
 
+const FIELD_LABELS = {
+  created: '创建',
+  progress: '播放进度',
+  duration: '视频时长',
+  status: '观看状态',
+  rating: '评分',
+  review: '短评',
+  tags: '标签',
+  season: '季',
+  episode: '集',
+  bookmarks: '收藏片段',
+  reminders: '提醒'
+};
+
+function formatFieldValue(field, val) {
+  if (val === null || val === undefined || val === '') return '（空）';
+  if (field === 'status') return STATUS_LABELS[val] || val;
+  if (field === 'rating') return val ? renderStars(val) : '未评分';
+  if (field === 'progress' || field === 'duration') return formatTime(val);
+  if (field === 'season') return '第' + val + '季';
+  if (field === 'episode') return '第' + val + '集';
+  if (field === 'tags') return Array.isArray(val) && val.length ? '#' + val.join(' #') : '（无）';
+  if (field === 'bookmarks') return Array.isArray(val) ? val.length + '个片段' : val;
+  if (field === 'reminders') return Array.isArray(val) ? val.length + '个提醒' : val;
+  if (field === 'review') return val || '（空）';
+  if (field === 'created') return '✓';
+  return String(val);
+}
+
+async function renderTimeline(itemId) {
+  const logs = await getChangeLogsByItemId(itemId);
+  if (!logs || !logs.length) {
+    return '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">暂无变更记录，保存进度或修改状态后会在这里显示</div>';
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  return `
+    <div class="timeline" style="margin-top:8px">
+      ${logs.slice(0, 50).map(log => {
+        const t = new Date(log.timestamp);
+        const dateStr = t.toLocaleDateString('zh-CN');
+        const timeStr = t.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        let dateLabel = dateStr;
+        if (t >= today) dateLabel = '今天';
+        else if (t >= yesterday) dateLabel = '昨天';
+
+        const changesHtml = log.changes.map(c => {
+          const label = FIELD_LABELS[c.field] || c.field;
+          const oldV = formatFieldValue(c.field, c.oldValue);
+          const newV = formatFieldValue(c.field, c.newValue);
+          return `<div class="timeline-change">
+            <span class="timeline-field">${label}</span>
+            <span class="timeline-arrow">→</span>
+            <span class="timeline-new">${newV}</span>
+            ${c.field !== 'created' ? `<span class="timeline-old" title="原值：${oldV}">（原：${oldV}）</span>` : ''}
+          </div>`;
+        }).join('');
+
+        const snapProgress = log.snapshot?.progress || 0;
+        const snapDuration = log.snapshot?.duration || 0;
+        const snapPercent = snapDuration > 0 ? Math.round(snapProgress / snapDuration * 100) : 0;
+
+        return `
+          <div class="timeline-item" data-log-id="${log.id}">
+            <div class="timeline-dot"></div>
+            <div class="timeline-content">
+              <div class="timeline-header">
+                <span class="timeline-date">${dateLabel} ${timeStr}</span>
+                ${log.note ? `<span class="timeline-note">${log.note}</span>` : ''}
+                ${log.snapshot?.progress ? `<span class="timeline-progress" style="margin-left:auto">▶ ${formatTime(snapProgress)}${snapPercent ? ' (' + snapPercent + '%)' : ''}</span>` : ''}
+              </div>
+              <div class="timeline-changes">${changesHtml}</div>
+              ${log.snapshot?.review ? `<div class="timeline-snapshot-review" title="当时的短评">📝 ${log.snapshot.review}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 function populateFilters() {
   const platforms = [...new Set(allItems.map(i => i.platform).filter(Boolean))].sort();
   const platformSelect = document.getElementById('filter-platform');
@@ -223,7 +308,7 @@ function renderItems() {
   });
 }
 
-function openDetailModal(item) {
+async function openDetailModal(item) {
   editingItem = item;
   const modal = document.getElementById('item-modal');
   document.getElementById('modal-title').textContent = item.title;
@@ -315,12 +400,22 @@ function openDetailModal(item) {
       ${remindersHtml}
     </div>
 
+    <div class="detail-section">
+      <div class="detail-section-title">📜 观看时间线</div>
+      <div id="timeline-container" style="margin-top:4px"><span style="color:var(--text-muted);font-size:13px">加载中…</span></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-secondary" id="modal-copy">复制分享卡片</button>
       ${item.url ? `<a href="${item.url}" target="_blank" class="btn btn-secondary">打开链接</a>` : ''}
       <button class="btn btn-primary" id="modal-close2">关闭</button>
     </div>
   `;
+
+  renderTimeline(item.id).then(html => {
+    const container = document.getElementById('timeline-container');
+    if (container) container.innerHTML = html;
+  });
 
   modal.querySelectorAll('[data-bookmark]').forEach(btn => {
     btn.addEventListener('click', async () => {

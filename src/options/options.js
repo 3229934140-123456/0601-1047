@@ -214,17 +214,42 @@ function importDataAction() {
 }
 
 async function handleImportFile(file) {
-  if (!confirm('导入将覆盖现有数据，确定继续吗？')) return;
-
   try {
     const text = await file.text();
-    const success = await importData(text);
-    if (success) {
+    const preview = await previewImport(text);
+    if (!preview.valid) {
+      showToast('导入失败：文件格式错误 - ' + preview.error);
+      return;
+    }
+
+    const diff = (cur, imp) => {
+      if (imp > cur) return `(+${imp - cur})`;
+      if (imp < cur) return `(${imp - cur})`;
+      return '(不变)';
+    };
+
+    const message = `即将导入备份数据：
+
+📦 导出于：${preview.exportedAt}（版本 ${preview.version}）
+
+📽 作品：当前 ${preview.items.current} 条 → 导入 ${preview.items.importing} 条 ${diff(preview.items.current, preview.items.importing)}
+🌐 规则：当前 ${preview.rules.current} 条 → 导入 ${preview.rules.importing} 条 ${diff(preview.rules.current, preview.rules.importing)}
+📜 历史：当前 ${preview.history.current} 条 → 导入 ${preview.history.importing} 条 ${diff(preview.history.current, preview.history.importing)}
+🕒 变更日志：当前 ${preview.changeLogs.current} 条 → 导入 ${preview.changeLogs.importing} 条 ${diff(preview.changeLogs.current, preview.changeLogs.importing)}
+🧪 测试记录：当前 ${preview.ruleTests.current} 条 → 导入 ${preview.ruleTests.importing} 条 ${diff(preview.ruleTests.current, preview.ruleTests.importing)}
+
+⚠️ 导入后现有数据将被完全覆盖，确定继续吗？`;
+
+    if (!confirm(message)) return;
+
+    const result = await importData(text);
+    if (result.success) {
       showToast('数据导入成功');
       await loadSettings();
       await loadSiteRules();
+      await loadReminders();
     } else {
-      showToast('导入失败：文件格式错误');
+      showToast('导入失败：' + (result.error || '未知错误'));
     }
   } catch (e) {
     showToast('导入失败：' + e.message);
@@ -287,6 +312,281 @@ async function handleClearHistory() {
   }
 }
 
+function getHostname(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function matchRuleForUrl(rules, url) {
+  const hostname = getHostname(url);
+  if (!hostname) return null;
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    const matches = Array.isArray(rule.match) ? rule.match : [rule.match];
+    for (const m of matches) {
+      const mm = (m || '').trim().replace(/^www\./, '');
+      if (!mm) continue;
+      if (hostname === mm || hostname.endsWith('.' + mm)) {
+        return rule;
+      }
+    }
+  }
+  return null;
+}
+
+async function testCurrentTab() {
+  const resultContainer = document.getElementById('test-result');
+  resultContainer.style.display = 'block';
+  resultContainer.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px">🔍 正在检测当前标签页…</div>';
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) throw new Error('找不到当前标签页');
+    if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) {
+      throw new Error('当前页面是浏览器内部页面，无法注入脚本');
+    }
+
+    document.getElementById('test-url').value = tab.url || '';
+
+    const rules = await getSiteRules();
+    const matchedRule = matchRuleForUrl(rules, tab.url);
+
+    const [detectionResult] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (ruleJson) => {
+        const rule = ruleJson ? JSON.parse(ruleJson) : null;
+        const trySelector = (selector) => {
+          if (!selector) return { success: false, reason: '选择器为空' };
+          try {
+            const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
+            for (const sel of list) {
+              if (!sel) continue;
+              try {
+                const el = document.querySelector(sel);
+                if (el) {
+                  const text = (el.innerText || el.textContent || '').trim();
+                  if (text) return { success: true, value: text, selector: sel };
+                }
+              } catch { /* ignore */ }
+            }
+            return { success: false, reason: '所有选择器都没匹配到元素，或匹配到的元素为空文本' };
+          } catch (e) {
+            return { success: false, reason: '解析选择器出错: ' + e.message };
+          }
+        };
+
+        const tryVideo = (selector) => {
+          if (!selector) return { success: false, reason: '未配置progress选择器' };
+          try {
+            const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
+            for (const sel of list) {
+              const el = document.querySelector(sel);
+              if (el && el.tagName === 'VIDEO') {
+                return { success: true, selector: sel, value: { currentTime: el.currentTime || 0, duration: el.duration || 0 } };
+              }
+            }
+            const videos = document.querySelectorAll('video');
+            for (const v of videos) {
+              if (v.duration) {
+                return { success: true, selector: 'video (fallback)', value: { currentTime: v.currentTime || 0, duration: v.duration || 0 } };
+              }
+            }
+            return { success: false, reason: '未找到video元素，或video未加载' };
+          } catch (e) {
+            return { success: false, reason: '查找video出错: ' + e.message };
+          }
+        };
+
+        const parseSeasonEpisode = (text) => {
+          if (!text) return { season: null, episode: null };
+          const s = text.match(/第\s*(\d+)\s*季|S(\d+)/i);
+          const e = text.match(/第\s*(\d+)\s*[集话]|E(\d+)/i);
+          return {
+            season: s ? parseInt(s[1] || s[2]) : null,
+            episode: e ? parseInt(e[1] || e[2]) : null
+          };
+        };
+
+        let titleResult = { success: false, reason: '无规则' };
+        let epResult = { success: false, reason: '无规则' };
+        let progResult = { success: false, reason: '无规则' };
+        let epText = null;
+
+        if (rule) {
+          titleResult = trySelector(rule.titleSelector);
+          epResult = trySelector(rule.episodeSelector);
+          progResult = tryVideo(rule.progressSelector);
+          epText = epResult.success ? epResult.value : null;
+        }
+
+        if (!titleResult.success) {
+          const fallback = trySelector('h1, .video-title, .title, .media-title');
+          if (fallback.success) titleResult = { ...fallback, fallback: true };
+        }
+
+        const seasonEpisode = parseSeasonEpisode(epText || (titleResult.success ? titleResult.value : '') || document.title);
+
+        return {
+          title: titleResult,
+          episode: epResult,
+          progress: progResult,
+          season: seasonEpisode.season,
+          episodeNum: seasonEpisode.episode,
+          pageTitle: document.title
+        };
+      },
+      args: [matchedRule ? JSON.stringify(matchedRule) : null]
+    });
+
+    const detect = detectionResult?.result || {};
+    const finalResult = {
+      url: tab.url,
+      hostname: getHostname(tab.url),
+      matchedRule: matchedRule ? { id: matchedRule.id, name: matchedRule.name } : null,
+      ruleSelectors: matchedRule ? {
+        title: matchedRule.titleSelector || '(未配置)',
+        episode: matchedRule.episodeSelector || '(未配置)',
+        progress: matchedRule.progressSelector || '(未配置)'
+      } : null,
+      detection: detect,
+      success: detect.title?.success || !!detect.pageTitle
+    };
+
+    await addRuleTest(finalResult);
+    renderTestResult(finalResult);
+  } catch (e) {
+    console.error(e);
+    renderTestResult({ error: e.message || String(e) });
+  }
+}
+
+function testUrlStatic(urlInput) {
+  const resultContainer = document.getElementById('test-result');
+  resultContainer.style.display = 'block';
+
+  if (!urlInput) {
+    renderTestResult({ error: '请输入要测试的URL，或直接点击"测试当前页"' });
+    return;
+  }
+
+  const hostname = getHostname(urlInput);
+  if (!hostname) {
+    renderTestResult({ error: 'URL格式不正确，无法解析域名' });
+    return;
+  }
+
+  (async () => {
+    const rules = await getSiteRules();
+    const matchedRule = matchRuleForUrl(rules, urlInput);
+    const result = {
+      staticOnly: true,
+      url: urlInput,
+      hostname,
+      matchedRule: matchedRule ? { id: matchedRule.id, name: matchedRule.name, enabled: matchedRule.enabled } : null,
+      ruleSelectors: matchedRule ? {
+        title: matchedRule.titleSelector || '(未配置)',
+        episode: matchedRule.episodeSelector || '(未配置)',
+        progress: matchedRule.progressSelector || '(未配置)'
+      } : null,
+      hint: matchedRule
+        ? '域名匹配成功！但无法在设置页验证页面DOM，建议打开该页面后点击"测试当前页"查看实际识别结果。'
+        : '没有任何已启用的规则匹配该域名，请添加对应站点规则。'
+    };
+    await addRuleTest(result);
+    renderTestResult(result);
+  })();
+}
+
+function renderTestResult(result) {
+  const container = document.getElementById('test-result');
+  if (result.error) {
+    container.innerHTML = `
+      <div style="padding:14px 16px;background:#fef2f2;border:1px solid #fecaca;border-radius:var(--radius-md);color:#991b1b;font-size:13px;">
+        ❌ 测试失败：${result.error}
+      </div>`;
+    return;
+  }
+
+  let html = '';
+  const cardHeader = (title, icon = '📋') => `<div style="font-weight:600;font-size:14px;color:var(--text-primary);margin-bottom:8px;">${icon} ${title}</div>`;
+
+  if (result.staticOnly) {
+    html += `<div style="padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);font-size:13px;color:#92400e;margin-bottom:12px;">
+      ℹ️ ${result.hint || ''}
+    </div>`;
+  }
+
+  html += `<div style="padding:14px 16px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-md);">`;
+  html += cardHeader('基本信息', '🔗');
+  html += `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:4px;"><b>URL：</b>${result.url || '-'}</div>`;
+  html += `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;"><b>域名：</b>${result.hostname || '-'}</div>`;
+
+  html += `<div style="border-top:1px dashed var(--border-color);padding-top:10px;margin-top:6px">`;
+  html += cardHeader('规则匹配', '🎯');
+  if (result.matchedRule) {
+    html += `<div style="padding:8px 12px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:var(--radius-sm);font-size:13px;">
+      ✅ 匹配规则：<b>${result.matchedRule.name}</b>（ID: ${result.matchedRule.id}）
+    </div>`;
+    if (result.ruleSelectors) {
+      html += `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">
+        <div><b>标题选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.title}</code></div>
+        <div style="margin-top:4px"><b>季集选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.episode}</code></div>
+        <div style="margin-top:4px"><b>进度选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.progress}</code></div>
+      </div>`;
+    }
+  } else {
+    html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);font-size:13px;color:#991b1b;">
+      ❌ 没有匹配的规则
+    </div>`;
+  }
+  html += `</div>`;
+
+  if (result.detection) {
+    html += `<div style="border-top:1px dashed var(--border-color);padding-top:10px;margin-top:10px">`;
+    html += cardHeader('实际识别结果', '🔍');
+
+    const renderField = (label, fieldResult, parser) => {
+      if (!fieldResult) return '';
+      if (fieldResult.success) {
+        const val = parser ? parser(fieldResult.value) : (typeof fieldResult.value === 'string' ? fieldResult.value : JSON.stringify(fieldResult.value));
+        return `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(34,197,94,0.06);border-radius:4px;">
+          <b>${label}：</b><span style="color:var(--success-color);">${val}</span>
+          ${fieldResult.selector ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">匹配选择器：<code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${fieldResult.selector}</code>${fieldResult.fallback ? '（回退默认）' : ''}</div>` : ''}
+        </div>`;
+      } else {
+        return `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(239,68,68,0.05);border-radius:4px;">
+          <b>${label}：</b><span style="color:#991b1b;">❌ 失败</span>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">原因：${fieldResult.reason || '未知'}</div>
+        </div>`;
+      }
+    };
+
+    html += renderField('标题', result.detection.title);
+    html += renderField('季集文本', result.detection.episode);
+    if (result.detection.season || result.detection.episodeNum) {
+      html += `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(59,130,246,0.06);border-radius:4px;">
+        <b>解析季/集：</b>第${result.detection.season || '?'}季 / 第${result.detection.episodeNum || '?'}集
+      </div>`;
+    }
+    html += renderField('播放进度', result.detection.progress, v => {
+      if (!v) return '无';
+      const fmt = s => {
+        if (!s) return '00:00';
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      };
+      return `${fmt(v.currentTime)} / ${fmt(v.duration)}${v.duration ? ` (${Math.round(v.currentTime / v.duration * 100)}%)` : ''}`;
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   await loadSiteRules();
@@ -327,6 +627,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('history-modal').addEventListener('click', (e) => {
     if (e.target.id === 'history-modal') {
       document.getElementById('history-modal').style.display = 'none';
+    }
+  });
+
+  document.getElementById('test-current-tab').addEventListener('click', testCurrentTab);
+  document.getElementById('test-rule-btn').addEventListener('click', () => {
+    const url = document.getElementById('test-url').value.trim();
+    if (!url) {
+      testCurrentTab();
+    } else {
+      testUrlStatic(url);
     }
   });
 });

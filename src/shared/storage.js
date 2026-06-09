@@ -2,7 +2,9 @@ const STORAGE_KEYS = {
   ITEMS: 'tracker_items',
   SETTINGS: 'tracker_settings',
   HISTORY: 'tracker_history',
-  SITE_RULES: 'tracker_site_rules'
+  SITE_RULES: 'tracker_site_rules',
+  CHANGE_LOGS: 'tracker_change_logs',
+  RULE_TESTS: 'tracker_rule_tests'
 };
 
 const STATUS = {
@@ -169,6 +171,9 @@ async function addItem(itemData) {
   items.unshift(newItem);
   await saveItems(items);
   await addHistory({ type: 'add', itemId: newItem.id, itemTitle: newItem.title });
+  await addChangeLog(newItem.id, {
+    created: { oldValue: null, newValue: true }
+  }, newItem, '创建作品');
   return newItem;
 }
 
@@ -176,19 +181,43 @@ async function updateItem(id, updates) {
   const items = await getItems();
   const index = items.findIndex(item => item.id === id);
   if (index === -1) return null;
-  items[index] = {
+  const oldItem = { ...items[index] };
+  const newItem = {
     ...items[index],
     ...updates,
     updatedAt: Date.now()
   };
+
+  const trackedFields = ['progress', 'duration', 'status', 'rating', 'review', 'tags', 'season', 'episode', 'bookmarks', 'reminders'];
+  const changes = {};
+  for (const field of trackedFields) {
+    const oldVal = oldItem[field];
+    const newVal = newItem[field];
+    const isDifferent = Array.isArray(oldVal) && Array.isArray(newVal)
+      ? JSON.stringify(oldVal) !== JSON.stringify(newVal)
+      : oldVal !== newVal;
+    if (isDifferent && field in updates) {
+      changes[field] = { oldValue: oldVal, newValue: newVal };
+    }
+  }
+
+  items[index] = newItem;
   await saveItems(items);
-  return items[index];
+
+  if (Object.keys(changes).length) {
+    await addChangeLog(id, changes, newItem);
+  }
+
+  await addHistory({ type: 'update', itemId: id, itemTitle: newItem.title, changes: Object.keys(changes) });
+
+  return newItem;
 }
 
 async function deleteItem(id) {
   const items = await getItems();
   const filtered = items.filter(item => item.id !== id);
   await saveItems(filtered);
+  await clearChangeLogs(id);
   return true;
 }
 
@@ -263,16 +292,89 @@ async function clearHistory() {
   return setStorage(STORAGE_KEYS.HISTORY, []);
 }
 
+async function getChangeLogs() {
+  return getStorage(STORAGE_KEYS.CHANGE_LOGS, []);
+}
+
+async function getChangeLogsByItemId(itemId) {
+  const logs = await getChangeLogs();
+  return logs.filter(log => log.itemId === itemId).sort((a, b) => b.timestamp - a.timestamp);
+}
+
+async function addChangeLog(itemId, changes, snapshot = {}, note = '') {
+  if (!itemId || !changes || !Object.keys(changes).length) return null;
+  const logs = await getChangeLogs();
+  const changeEntries = Object.entries(changes).map(([field, val]) => ({
+    field,
+    oldValue: val.oldValue,
+    newValue: val.newValue
+  }));
+  logs.unshift({
+    id: generateId(),
+    itemId,
+    timestamp: Date.now(),
+    changes: changeEntries,
+    snapshot: {
+      progress: snapshot.progress || 0,
+      status: snapshot.status || '',
+      rating: snapshot.rating || 0,
+      review: snapshot.review || '',
+      tags: snapshot.tags ? [...snapshot.tags] : [],
+      season: snapshot.season || null,
+      episode: snapshot.episode || null
+    },
+    note
+  });
+  if (logs.length > 2000) logs.length = 2000;
+  await setStorage(STORAGE_KEYS.CHANGE_LOGS, logs);
+  return true;
+}
+
+async function clearChangeLogs(itemId = null) {
+  if (!itemId) {
+    return setStorage(STORAGE_KEYS.CHANGE_LOGS, []);
+  }
+  const logs = await getChangeLogs();
+  const filtered = logs.filter(l => l.itemId !== itemId);
+  return setStorage(STORAGE_KEYS.CHANGE_LOGS, filtered);
+}
+
+async function getRuleTests() {
+  return getStorage(STORAGE_KEYS.RULE_TESTS, []);
+}
+
+async function addRuleTest(result) {
+  const tests = await getRuleTests();
+  tests.unshift({
+    id: generateId(),
+    timestamp: Date.now(),
+    ...result
+  });
+  if (tests.length > 500) tests.length = 500;
+  await setStorage(STORAGE_KEYS.RULE_TESTS, tests);
+  return true;
+}
+
+async function clearRuleTests() {
+  return setStorage(STORAGE_KEYS.RULE_TESTS, []);
+}
+
 async function exportData(format = 'json') {
   const items = await getItems();
   const settings = await getSettings();
   const siteRules = await getSiteRules();
+  const history = await getHistory();
+  const changeLogs = await getChangeLogs();
+  const ruleTests = await getRuleTests();
   const data = {
     exportedAt: Date.now(),
-    version: '1.0.0',
+    version: '1.1.0',
     items,
     settings,
-    siteRules
+    siteRules,
+    history,
+    changeLogs,
+    ruleTests
   };
   
   if (format === 'json') {
@@ -300,19 +402,70 @@ async function exportData(format = 'json') {
 async function importData(jsonStr) {
   try {
     const data = JSON.parse(jsonStr);
-    if (data.items) {
-      await saveItems(data.items);
-    }
-    if (data.settings) {
-      await saveSettings(data.settings);
-    }
-    if (data.siteRules) {
-      await saveSiteRules(data.siteRules);
-    }
-    return true;
+    const existingItems = await getItems();
+    const existingRules = await getSiteRules();
+    const existingHistory = await getHistory();
+    const existingLogs = await getChangeLogs();
+    const existingTests = await getRuleTests();
+
+    const summary = {
+      items: { before: existingItems.length, after: (data.items || []).length },
+      rules: { before: existingRules.length, after: (data.siteRules || []).length },
+      history: { before: existingHistory.length, after: (data.history || []).length },
+      changeLogs: { before: existingLogs.length, after: (data.changeLogs || []).length },
+      ruleTests: { before: existingTests.length, after: (data.ruleTests || []).length }
+    };
+
+    if (data.items) await saveItems(data.items);
+    if (data.settings) await saveSettings(data.settings);
+    if (data.siteRules) await saveSiteRules(data.siteRules);
+    if (data.history) await setStorage(STORAGE_KEYS.HISTORY, data.history);
+    if (data.changeLogs) await setStorage(STORAGE_KEYS.CHANGE_LOGS, data.changeLogs);
+    if (data.ruleTests) await setStorage(STORAGE_KEYS.RULE_TESTS, data.ruleTests);
+
+    return { success: true, summary };
   } catch (e) {
     console.error('Import failed:', e);
-    return false;
+    return { success: false, error: e.message };
+  }
+}
+
+async function previewImport(jsonStr) {
+  try {
+    const data = JSON.parse(jsonStr);
+    const existingItems = await getItems();
+    const existingRules = await getSiteRules();
+    const existingHistory = await getHistory();
+    const existingLogs = await getChangeLogs();
+    const existingTests = await getRuleTests();
+
+    return {
+      valid: true,
+      version: data.version || 'unknown',
+      exportedAt: data.exportedAt ? formatDateTime(data.exportedAt) : 'unknown',
+      items: {
+        current: existingItems.length,
+        importing: (data.items || []).length
+      },
+      rules: {
+        current: existingRules.length,
+        importing: (data.siteRules || []).length
+      },
+      history: {
+        current: existingHistory.length,
+        importing: (data.history || []).length
+      },
+      changeLogs: {
+        current: existingLogs.length,
+        importing: (data.changeLogs || []).length
+      },
+      ruleTests: {
+        current: existingTests.length,
+        importing: (data.ruleTests || []).length
+      }
+    };
+  } catch (e) {
+    return { valid: false, error: e.message };
   }
 }
 
@@ -341,6 +494,8 @@ if (typeof module !== 'undefined') {
     getStorage, setStorage, getItems, saveItems, getItemById, addItem, updateItem,
     deleteItem, findItemByUrl, findOrCreateItem, getSettings, saveSettings,
     getSiteRules, saveSiteRules, getHistory, addHistory, clearHistory,
-    exportData, importData, generateShareCard
+    getChangeLogs, getChangeLogsByItemId, addChangeLog, clearChangeLogs,
+    getRuleTests, addRuleTest, clearRuleTests,
+    exportData, importData, previewImport, generateShareCard
   };
 }

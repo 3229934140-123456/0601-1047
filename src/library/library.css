@@ -550,3 +550,135 @@
     display: none;
   }
 }
+
+.timeline {
+  position: relative;
+  padding-left: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 10px;
+  padding-bottom: 14px;
+  position: relative;
+}
+
+.timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--border-color);
+}
+
+.timeline-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  flex-shrink: 0;
+  margin-top: 3px;
+  position: relative;
+  z-index: 1;
+  border: 2px solid white;
+  box-shadow: 0 0 0 1.5px var(--primary-color);
+}
+
+.timeline-content {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-secondary);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.timeline-date {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.timeline-note {
+  background: var(--primary-color);
+  color: white;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.timeline-progress {
+  color: var(--primary-color);
+  font-weight: 600;
+  font-size: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.timeline-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.timeline-change {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.timeline-field {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.timeline-arrow {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.timeline-new {
+  color: var(--success-color);
+  font-weight: 500;
+}
+
+.timeline-old {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
+  text-decoration: line-through;
+}
+
+.timeline-snapshot-review {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--warning-color);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-height: 60px;
+  overflow-y: auto;
+}
