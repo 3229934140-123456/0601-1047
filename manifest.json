@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "影视追踪 - Media Tracker",
+  "version": "1.0.0",
+  "description": "在视频网站页面上顺手记录观看进度，支持标记状态、写短评、打星、添加标签、设置提醒等功能",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "src/assets/icon16.png",
+      "48": "src/assets/icon48.png",
+      "128": "src/assets/icon128.png"
+    },
+    "default_title": "影视追踪"
+  },
+  "background": {
+    "service_worker": "src/background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/content.js"],
+      "css": ["src/content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "src/options/options.html",
+  "web_accessible_resources": [
+    {
+      "resources": [
+      "src/library/library.html",
+      "src/shared/*"
+    ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "src/assets/icon16.png",
+    "48": "src/assets/icon48.png",
+    "128": "src/assets/icon128.png"
+  }
+}

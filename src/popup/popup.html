@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>影视追踪</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="popup-header">
+      <div class="header-title">
+        <span class="logo-icon">📺</span>
+        <span>影视追踪</span>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="open-library" title="收藏列表">📋</button>
+        <button class="icon-btn" id="open-settings" title="设置">⚙️</button>
+      </div>
+    </header>
+
+    <div class="tabs" id="main-tabs">
+      <div class="tab active" data-tab="current">当前</div>
+      <div class="tab" data-tab="recent">最近</div>
+      <div class="tab" data-tab="watchlist">待补</div>
+    </div>
+
+    <div class="tab-content" id="tab-current">
+      <div id="current-video-section" style="display:none;">
+        <div class="section-title">正在观看</div>
+        <div id="current-video-card" class="card"></div>
+      </div>
+
+      <div id="quick-add-section">
+        <div class="section-title">快速记录</div>
+        <div class="card">
+          <div class="form-group">
+            <input type="text" class="input" id="quick-title" placeholder="作品标题">
+          </div>
+          <div class="form-row">
+            <input type="number" class="input" id="quick-season" placeholder="季" min="1">
+            <input type="number" class="input" id="quick-episode" placeholder="集" min="1">
+          </div>
+          <div class="form-group">
+            <div class="form-label">状态</div>
+            <div class="status-tabs">
+              <button class="status-tab active" data-status="want_to_watch">想看</button>
+              <button class="status-tab" data-status="watching">在看</button>
+              <button class="status-tab" data-status="completed">看完</button>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="quick-add-btn" style="width:100%;">添加到列表</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-recent" style="display:none;">
+      <div id="recent-list"></div>
+    </div>
+
+    <div class="tab-content" id="tab-watchlist" style="display:none;">
+      <div id="watchlist-list"></div>
+    </div>
+  </div>
+
+  <div id="item-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-title">编辑条目</div>
+        <button class="modal-close" id="modal-close">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="../shared/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

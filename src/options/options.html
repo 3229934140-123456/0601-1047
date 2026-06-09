@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设置 - 影视追踪</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-inner">
+        <div class="logo-area">
+          <span class="logo-icon">📺</span>
+          <h1 class="app-title">影视追踪 - 设置</h1>
+        </div>
+        <div class="header-nav">
+          <a href="../library/library.html" class="nav-link">收藏列表</a>
+          <a href="#" class="nav-link active">设置</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="settings-layout">
+        <aside class="settings-sidebar">
+          <div class="sidebar-item active" data-section="general">
+            <span class="sidebar-icon">⚙️</span>
+            <span>通用设置</span>
+          </div>
+          <div class="sidebar-item" data-section="sites">
+            <span class="sidebar-icon">🌐</span>
+            <span>站点规则</span>
+          </div>
+          <div class="sidebar-item" data-section="reminders">
+            <span class="sidebar-icon">⏰</span>
+            <span>提醒设置</span>
+          </div>
+          <div class="sidebar-item" data-section="privacy">
+            <span class="sidebar-icon">🔒</span>
+            <span>隐私设置</span>
+          </div>
+          <div class="sidebar-item" data-section="data">
+            <span class="sidebar-icon">💾</span>
+            <span>数据管理</span>
+          </div>
+          <div class="sidebar-item" data-section="about">
+            <span class="sidebar-icon">ℹ️</span>
+            <span>关于</span>
+          </div>
+        </aside>
+
+        <section class="settings-content">
+          <div class="settings-section" id="section-general">
+            <h2 class="section-title">通用设置</h2>
+
+            <div class="setting-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">自动识别视频信息</div>
+                  <div class="setting-desc">在访问视频网站时自动识别标题、季集和播放进度</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="set-autodetect">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">显示页面浮层</div>
+                  <div class="setting-desc">在视频页面右下角显示快速操作按钮</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="set-overlay">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">启用桌面通知</div>
+                  <div class="setting-desc">在提醒触发时显示系统通知</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="set-notifications">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section" id="section-sites" style="display:none;">
+            <h2 class="section-title">站点规则管理</h2>
+            <p class="section-desc">配置各视频网站的选择器规则，用于自动识别视频信息。</p>
+
+            <div class="setting-card">
+              <div class="site-list" id="site-list"></div>
+              <button class="btn btn-secondary" id="add-site-btn" style="margin-top:12px;">
+                ➕ 添加自定义站点
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-section" id="section-reminders" style="display:none;">
+            <h2 class="section-title">提醒设置</h2>
+
+            <div class="setting-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">默认提醒时间</div>
+                  <div class="setting-desc">新建提醒时默认使用的时间</div>
+                </div>
+                <input type="time" class="input" id="set-reminder-time" style="width:140px;">
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-info">
+                <div class="setting-name">当前待提醒列表</div>
+                <div class="setting-desc">所有已设置的提醒</div>
+              </div>
+              <div id="reminders-list" style="margin-top:12px;"></div>
+            </div>
+          </div>
+
+          <div class="settings-section" id="section-privacy" style="display:none;">
+            <h2 class="section-title">隐私设置</h2>
+
+            <div class="setting-card">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-name">隐私模式</div>
+                  <div class="setting-desc">不在浮层和弹出面板中显示具体观看信息（适用于截图、录屏场景）</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="set-privacy">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-info">
+                <div class="setting-name">观看历史</div>
+                <div class="setting-desc">查看和清除你的观看操作历史记录</div>
+              </div>
+              <div style="margin-top:12px;">
+                <button class="btn btn-secondary" id="view-history-btn">查看历史</button>
+                <button class="btn btn-danger" id="clear-history-btn">清除历史</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section" id="section-data" style="display:none;">
+            <h2 class="section-title">数据管理</h2>
+
+            <div class="setting-card">
+              <div class="setting-info">
+                <div class="setting-name">导出数据</div>
+                <div class="setting-desc">将所有数据导出为文件，方便备份</div>
+              </div>
+              <div style="margin-top:12px; display:flex; gap:8px;">
+                <select class="select" id="export-format" style="width:140px;">
+                  <option value="json">JSON 格式</option>
+                  <option value="csv">CSV 格式</option>
+                </select>
+                <button class="btn btn-primary" id="export-btn">📥 导出</button>
+              </div>
+            </div>
+
+            <div class="setting-card">
+              <div class="setting-info">
+                <div class="setting-name">导入数据</div>
+                <div class="setting-desc">从备份文件恢复数据（将覆盖现有数据）</div>
+              </div>
+              <div style="margin-top:12px;">
+                <input type="file" id="import-file" accept=".json" style="display:none;">
+                <button class="btn btn-secondary" id="import-btn">📤 选择文件导入</button>
+              </div>
+            </div>
+
+            <div class="setting-card danger-card">
+              <div class="setting-info">
+                <div class="setting-name">⚠️ 清除所有数据</div>
+                <div class="setting-desc">删除所有收藏条目、设置和历史记录。此操作不可恢复！</div>
+              </div>
+              <button class="btn btn-danger" id="clear-all-btn" style="margin-top:12px;">清除所有数据</button>
+            </div>
+          </div>
+
+          <div class="settings-section" id="section-about" style="display:none;">
+            <h2 class="section-title">关于</h2>
+
+            <div class="setting-card about-card">
+              <div class="about-logo">📺</div>
+              <h3 class="about-title">影视追踪</h3>
+              <div class="about-version">版本 1.0.0</div>
+              <p class="about-desc">
+                一个功能强大的浏览器扩展，帮助你在各大视频网站上轻松记录观看进度。
+                支持标记想看/在看/看完状态、写短评、打星、添加标签、设置下集提醒、
+                收藏精彩片段时间点、一键复制分享卡片等功能。
+              </p>
+              <div class="about-features">
+                <div class="feature-item">✅ 多平台支持</div>
+                <div class="feature-item">✅ 自动识别进度</div>
+                <div class="feature-item">✅ 智能筛选</div>
+                <div class="feature-item">✅ 数据导入导出</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="site-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="site-modal-title">编辑站点规则</div>
+        <button class="modal-close" id="site-modal-close">×</button>
+      </div>
+      <div class="modal-body" style="padding:0 24px 24px;">
+        <div class="form-group">
+          <label class="form-label">站点名称</label>
+          <input type="text" class="input" id="site-name" placeholder="例如：哔哩哔哩">
+        </div>
+        <div class="form-group">
+          <label class="form-label">域名匹配（多个用逗号分隔）</label>
+          <input type="text" class="input" id="site-match" placeholder="例如：bilibili.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">标题选择器</label>
+          <input type="text" class="input" id="site-title-selector" placeholder="CSS 选择器，例如 h1.title">
+        </div>
+        <div class="form-group">
+          <label class="form-label">集数选择器</label>
+          <input type="text" class="input" id="site-episode-selector" placeholder="CSS 选择器（可选）">
+        </div>
+        <div class="form-group">
+          <label class="form-label">进度选择器</label>
+          <input type="text" class="input" id="site-progress-selector" value="video" placeholder="默认 video">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="switch">
+            <input type="checkbox" id="site-enabled" checked>
+            <span class="slider"></span>
+          </label>
+          <span style="margin-left:8px;">启用该规则</span>
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex; gap:8px; justify-content:flex-end; padding:16px 24px; border-top:1px solid var(--border-color);">
+        <button class="btn btn-secondary" id="site-cancel">取消</button>
+        <button class="btn btn-primary" id="site-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="history-modal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:600px;">
+      <div class="modal-header">
+        <div class="modal-title">观看历史</div>
+        <button class="modal-close" id="history-modal-close">×</button>
+      </div>
+      <div class="modal-body" id="history-list" style="padding:0 24px 24px; max-height:400px; overflow-y:auto;"></div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="../shared/storage.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
