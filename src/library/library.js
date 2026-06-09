@@ -65,9 +65,30 @@ async function renderTimeline(itemId) {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
+  const fields = ['progress', 'status', 'rating', 'review', 'tags', 'season', 'episode'];
+  const snapLabels = {
+    progress: '播放进度',
+    status: '观看状态',
+    rating: '评分',
+    review: '短评',
+    tags: '标签',
+    season: '季',
+    episode: '集'
+  };
+  const formatSnap = (field, val) => {
+    if (field === 'progress') return formatTime(val || 0);
+    if (field === 'status') return STATUS_LABELS[val] || '—';
+    if (field === 'rating') return val ? renderStars(val) : '未评分';
+    if (field === 'review') return val ? val : '（空）';
+    if (field === 'tags') return Array.isArray(val) && val.length ? '#' + val.join(' #') : '（无）';
+    if (field === 'season') return val ? `第${val}季` : '—';
+    if (field === 'episode') return val ? `第${val}集` : '—';
+    return val != null ? String(val) : '—';
+  };
+
   return `
     <div class="timeline" style="margin-top:8px">
-      ${logs.slice(0, 50).map(log => {
+      ${logs.slice(0, 100).map((log, idx) => {
         const t = new Date(log.timestamp);
         const dateStr = t.toLocaleDateString('zh-CN');
         const timeStr = t.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -90,18 +111,36 @@ async function renderTimeline(itemId) {
         const snapProgress = log.snapshot?.progress || 0;
         const snapDuration = log.snapshot?.duration || 0;
         const snapPercent = snapDuration > 0 ? Math.round(snapProgress / snapDuration * 100) : 0;
+        const changedFields = new Set(log.changes.map(c => c.field));
+        const onlyProgress = changedFields.size === 1 && (changedFields.has('progress') || changedFields.has('duration') || changedFields.has('lastWatchedAt'));
+        const changeSummary = log.changes.map(c => (FIELD_LABELS[c.field] || c.field)).join('、');
+
+        const snapshotRows = fields.map(f => {
+          const v = formatSnap(f, log.snapshot?.[f]);
+          const isChanged = changedFields.has(f);
+          return `<div class="timeline-snap-row ${isChanged ? 'changed' : ''}">
+            <span class="timeline-snap-label">${snapLabels[f]}</span>
+            <span class="timeline-snap-value">${v}</span>
+          </div>`;
+        }).join('');
 
         return `
           <div class="timeline-item" data-log-id="${log.id}">
             <div class="timeline-dot"></div>
-            <div class="timeline-content">
-              <div class="timeline-header">
+            <div class="timeline-content timeline-collapsible ${idx === 0 ? 'expanded' : ''}">
+              <div class="timeline-header timeline-toggle">
                 <span class="timeline-date">${dateLabel} ${timeStr}</span>
                 ${log.note ? `<span class="timeline-note">${log.note}</span>` : ''}
-                ${log.snapshot?.progress ? `<span class="timeline-progress" style="margin-left:auto">▶ ${formatTime(snapProgress)}${snapPercent ? ' (' + snapPercent + '%)' : ''}</span>` : ''}
+                ${onlyProgress ? `<span class="timeline-summary" title="本次只更新了播放进度">⏱ 仅更新进度</span>` : `<span class="timeline-summary" title="本次变更字段">✏️ ${changeSummary}</span>`}
+                ${log.snapshot?.progress ? `<span class="timeline-progress">▶ ${formatTime(snapProgress)}${snapPercent ? ' (' + snapPercent + '%)' : ''}</span>` : ''}
+                <span class="timeline-caret">▾</span>
               </div>
               <div class="timeline-changes">${changesHtml}</div>
-              ${log.snapshot?.review ? `<div class="timeline-snapshot-review" title="当时的短评">📝 ${log.snapshot.review}</div>` : ''}
+              <div class="timeline-snapshot-wrapper">
+                <div class="timeline-snapshot-title">📷 当时的完整快照</div>
+                <div class="timeline-snapshot-grid">${snapshotRows}</div>
+                ${log.snapshot?.review ? `<div class="timeline-snapshot-review" title="当时的短评">📝 ${log.snapshot.review}</div>` : ''}
+              </div>
             </div>
           </div>
         `;
@@ -414,7 +453,16 @@ async function openDetailModal(item) {
 
   renderTimeline(item.id).then(html => {
     const container = document.getElementById('timeline-container');
-    if (container) container.innerHTML = html;
+    if (!container) return;
+    container.innerHTML = html;
+
+    container.querySelectorAll('.timeline-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const content = toggle.closest('.timeline-collapsible');
+        if (!content) return;
+        content.classList.toggle('expanded');
+      });
+    });
   });
 
   modal.querySelectorAll('[data-bookmark]').forEach(btn => {

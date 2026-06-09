@@ -337,6 +337,139 @@ function matchRuleForUrl(rules, url) {
   return null;
 }
 
+async function detectInTab(tabId, matchedRule) {
+  const [detectionResult] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (ruleJson) => {
+      const rule = ruleJson ? JSON.parse(ruleJson) : null;
+      const trySelector = (selector) => {
+        if (!selector) return { success: false, reason: '选择器为空' };
+        try {
+          const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
+          const tried = [];
+          for (const sel of list) {
+            if (!sel) continue;
+            tried.push(sel);
+            try {
+              const el = document.querySelector(sel);
+              if (el) {
+                const text = (el.innerText || el.textContent || '').trim();
+                if (text) return { success: true, value: text, selector: sel, tried };
+              }
+            } catch (e) {
+              return { success: false, reason: `选择器语法错误「${sel}」: ${e.message}`, tried };
+            }
+          }
+          return {
+            success: false,
+            reason: tried.length
+              ? `尝试了 ${tried.length} 个选择器（${tried.join(' , ')}），但均未匹配到有文本内容的元素`
+              : '选择器列表为空',
+            tried
+          };
+        } catch (e) {
+          return { success: false, reason: '解析选择器出错: ' + e.message };
+        }
+      };
+
+      const tryVideo = (selector) => {
+        if (!selector) return { success: false, reason: '未配置progress选择器' };
+        try {
+          const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
+          const tried = [];
+          for (const sel of list) {
+            if (!sel) continue;
+            tried.push(sel);
+            const el = document.querySelector(sel);
+            if (el && el.tagName === 'VIDEO') {
+              return { success: true, selector: sel, tried, value: { currentTime: el.currentTime || 0, duration: el.duration || 0 } };
+            }
+          }
+          const videos = document.querySelectorAll('video');
+          for (const v of videos) {
+            if (v.duration) {
+              return { success: true, selector: 'video (fallback)', tried, value: { currentTime: v.currentTime || 0, duration: v.duration || 0 } };
+            }
+          }
+          return {
+            success: false,
+            tried,
+            reason: videos.length
+              ? `页面上有 ${videos.length} 个 <video> 元素，但都还没加载出时长（duration = NaN / 0），可能还在缓冲或该页面是纯直播`
+              : '页面中完全没有找到 <video> 元素'
+          };
+        } catch (e) {
+          return { success: false, reason: '查找video出错: ' + e.message };
+        }
+      };
+
+      const parseSeasonEpisode = (text) => {
+        if (!text) return { season: null, episode: null };
+        const s = text.match(/第\s*(\d+)\s*季|S(\d+)/i);
+        const e = text.match(/第\s*(\d+)\s*[集话]|E(\d+)/i);
+        return {
+          season: s ? parseInt(s[1] || s[2]) : null,
+          episode: e ? parseInt(e[1] || e[2]) : null
+        };
+      };
+
+      let titleResult = { success: false, reason: '无匹配规则' };
+      let epResult = { success: false, reason: '无匹配规则' };
+      let progResult = { success: false, reason: '无匹配规则' };
+      let epText = null;
+
+      if (rule) {
+        titleResult = trySelector(rule.titleSelector);
+        epResult = trySelector(rule.episodeSelector);
+        progResult = tryVideo(rule.progressSelector);
+        epText = epResult.success ? epResult.value : null;
+      }
+
+      if (!titleResult.success) {
+        const fallback = trySelector('h1, .video-title, .title, .media-title');
+        if (fallback.success) titleResult = { ...fallback, fallback: true };
+      }
+
+      const seasonEpisode = parseSeasonEpisode(epText || (titleResult.success ? titleResult.value : '') || document.title);
+
+      return {
+        title: titleResult,
+        episode: epResult,
+        progress: progResult,
+        season: seasonEpisode.season,
+        episodeNum: seasonEpisode.episode,
+        pageTitle: document.title,
+        pageUrl: location.href
+      };
+    },
+    args: [matchedRule ? JSON.stringify(matchedRule) : null]
+  });
+  return detectionResult?.result || null;
+}
+
+function waitForTabReady(tabId, timeout = 15000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve({ ready: false, reason: `等待页面加载超时（${timeout / 1000}s）` });
+    }, timeout);
+
+    function onUpdated(updatedId, info) {
+      if (updatedId !== tabId) return;
+      if (info.status === 'complete') {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        setTimeout(() => resolve({ ready: true }), 600);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
 async function testCurrentTab() {
   const resultContainer = document.getElementById('test-result');
   resultContainer.style.display = 'block';
@@ -348,102 +481,12 @@ async function testCurrentTab() {
     if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) {
       throw new Error('当前页面是浏览器内部页面，无法注入脚本');
     }
-
     document.getElementById('test-url').value = tab.url || '';
 
     const rules = await getSiteRules();
     const matchedRule = matchRuleForUrl(rules, tab.url);
-
-    const [detectionResult] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: (ruleJson) => {
-        const rule = ruleJson ? JSON.parse(ruleJson) : null;
-        const trySelector = (selector) => {
-          if (!selector) return { success: false, reason: '选择器为空' };
-          try {
-            const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
-            for (const sel of list) {
-              if (!sel) continue;
-              try {
-                const el = document.querySelector(sel);
-                if (el) {
-                  const text = (el.innerText || el.textContent || '').trim();
-                  if (text) return { success: true, value: text, selector: sel };
-                }
-              } catch { /* ignore */ }
-            }
-            return { success: false, reason: '所有选择器都没匹配到元素，或匹配到的元素为空文本' };
-          } catch (e) {
-            return { success: false, reason: '解析选择器出错: ' + e.message };
-          }
-        };
-
-        const tryVideo = (selector) => {
-          if (!selector) return { success: false, reason: '未配置progress选择器' };
-          try {
-            const list = Array.isArray(selector) ? selector : String(selector).split(',').map(s => s.trim()).filter(Boolean);
-            for (const sel of list) {
-              const el = document.querySelector(sel);
-              if (el && el.tagName === 'VIDEO') {
-                return { success: true, selector: sel, value: { currentTime: el.currentTime || 0, duration: el.duration || 0 } };
-              }
-            }
-            const videos = document.querySelectorAll('video');
-            for (const v of videos) {
-              if (v.duration) {
-                return { success: true, selector: 'video (fallback)', value: { currentTime: v.currentTime || 0, duration: v.duration || 0 } };
-              }
-            }
-            return { success: false, reason: '未找到video元素，或video未加载' };
-          } catch (e) {
-            return { success: false, reason: '查找video出错: ' + e.message };
-          }
-        };
-
-        const parseSeasonEpisode = (text) => {
-          if (!text) return { season: null, episode: null };
-          const s = text.match(/第\s*(\d+)\s*季|S(\d+)/i);
-          const e = text.match(/第\s*(\d+)\s*[集话]|E(\d+)/i);
-          return {
-            season: s ? parseInt(s[1] || s[2]) : null,
-            episode: e ? parseInt(e[1] || e[2]) : null
-          };
-        };
-
-        let titleResult = { success: false, reason: '无规则' };
-        let epResult = { success: false, reason: '无规则' };
-        let progResult = { success: false, reason: '无规则' };
-        let epText = null;
-
-        if (rule) {
-          titleResult = trySelector(rule.titleSelector);
-          epResult = trySelector(rule.episodeSelector);
-          progResult = tryVideo(rule.progressSelector);
-          epText = epResult.success ? epResult.value : null;
-        }
-
-        if (!titleResult.success) {
-          const fallback = trySelector('h1, .video-title, .title, .media-title');
-          if (fallback.success) titleResult = { ...fallback, fallback: true };
-        }
-
-        const seasonEpisode = parseSeasonEpisode(epText || (titleResult.success ? titleResult.value : '') || document.title);
-
-        return {
-          title: titleResult,
-          episode: epResult,
-          progress: progResult,
-          season: seasonEpisode.season,
-          episodeNum: seasonEpisode.episode,
-          pageTitle: document.title
-        };
-      },
-      args: [matchedRule ? JSON.stringify(matchedRule) : null]
-    });
-
-    const detect = detectionResult?.result || {};
-    const finalResult = {
-      url: tab.url,
+    const step1 = {
+      success: !!matchedRule,
       hostname: getHostname(tab.url),
       matchedRule: matchedRule ? { id: matchedRule.id, name: matchedRule.name } : null,
       ruleSelectors: matchedRule ? {
@@ -451,8 +494,20 @@ async function testCurrentTab() {
         episode: matchedRule.episodeSelector || '(未配置)',
         progress: matchedRule.progressSelector || '(未配置)'
       } : null,
-      detection: detect,
-      success: detect.title?.success || !!detect.pageTitle
+      hint: matchedRule
+        ? `域名匹配成功，使用规则「${matchedRule.name}」`
+        : '没有任何已启用的规则匹配这个域名'
+    };
+
+    const step2 = { success: true, mode: '直接使用当前活动标签页' };
+    const detection = matchedRule
+      ? await detectInTab(tab.id, matchedRule)
+      : { pageTitle: tab.title || '', title: { success: false, reason: '因为没有匹配到站点规则，已跳过注入检测' }, episode: null, progress: null };
+
+    const finalResult = {
+      url: tab.url,
+      step1, step2,
+      step3: { detection }
     };
 
     await addRuleTest(finalResult);
@@ -463,7 +518,7 @@ async function testCurrentTab() {
   }
 }
 
-function testUrlStatic(urlInput) {
+async function testUrlStatic(urlInput) {
   const resultContainer = document.getElementById('test-result');
   resultContainer.style.display = 'block';
 
@@ -472,32 +527,76 @@ function testUrlStatic(urlInput) {
     return;
   }
 
-  const hostname = getHostname(urlInput);
-  if (!hostname) {
-    renderTestResult({ error: 'URL格式不正确，无法解析域名' });
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlInput);
+  } catch {
+    renderTestResult({ error: 'URL格式不正确，无法解析域名，请确认是否包含 http:// 或 https://' });
+    return;
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    renderTestResult({ error: `只支持 http:// 或 https:// URL（当前协议：${parsedUrl.protocol}）` });
     return;
   }
 
-  (async () => {
-    const rules = await getSiteRules();
-    const matchedRule = matchRuleForUrl(rules, urlInput);
+  resultContainer.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:13px">🔍 正在后台打开页面并检测（约需 3-10 秒）…</div>';
+
+  const rules = await getSiteRules();
+  const matchedRule = matchRuleForUrl(rules, urlInput);
+  const step1 = {
+    success: !!matchedRule,
+    hostname: getHostname(urlInput),
+    matchedRule: matchedRule ? { id: matchedRule.id, name: matchedRule.name } : null,
+    ruleSelectors: matchedRule ? {
+      title: matchedRule.titleSelector || '(未配置)',
+      episode: matchedRule.episodeSelector || '(未配置)',
+      progress: matchedRule.progressSelector || '(未配置)'
+    } : null,
+    hint: matchedRule
+      ? `域名匹配成功，使用规则「${matchedRule.name}」`
+      : '没有任何已启用的规则匹配这个域名'
+  };
+
+  if (!matchedRule) {
     const result = {
-      staticOnly: true,
       url: urlInput,
-      hostname,
-      matchedRule: matchedRule ? { id: matchedRule.id, name: matchedRule.name, enabled: matchedRule.enabled } : null,
-      ruleSelectors: matchedRule ? {
-        title: matchedRule.titleSelector || '(未配置)',
-        episode: matchedRule.episodeSelector || '(未配置)',
-        progress: matchedRule.progressSelector || '(未配置)'
-      } : null,
-      hint: matchedRule
-        ? '域名匹配成功！但无法在设置页验证页面DOM，建议打开该页面后点击"测试当前页"查看实际识别结果。'
-        : '没有任何已启用的规则匹配该域名，请添加对应站点规则。'
+      step1,
+      step2: { success: false, skipped: true, hint: '因未匹配到站点规则，已跳过页面访问。可先添加该域名的自定义规则再测' },
+      step3: { detection: null }
     };
     await addRuleTest(result);
     renderTestResult(result);
-  })();
+    return;
+  }
+
+  let newTab = null;
+  let step2;
+  let detection = null;
+
+  try {
+    newTab = await chrome.tabs.create({ url: urlInput, active: false });
+    const ready = await waitForTabReady(newTab.id, 20000);
+    if (!ready.ready) {
+      step2 = { success: false, hint: ready.reason + '；可尝试：1）直接打开该页面后再点"测试当前页" 2）检查该URL是否需要登录或被网络拦截' };
+    } else {
+      step2 = { success: true, mode: '已在后台打开新标签页并等待加载完成，检测完成后已自动关闭' };
+      try {
+        detection = await detectInTab(newTab.id, matchedRule);
+      } catch (injectErr) {
+        step2 = { success: false, hint: '页面已加载但无法注入脚本：' + injectErr.message + '；可尝试：1）刷新该页面后直接测试当前页 2）检查该域名是否在 host_permissions 白名单内' };
+      }
+    }
+  } catch (e) {
+    step2 = { success: false, hint: '无法打开标签页：' + e.message + '；可尝试：1）先手动打开该页面再点"测试当前页" 2）确认URL可以在浏览器中正常访问' };
+  } finally {
+    if (newTab && newTab.id) {
+      try { await chrome.tabs.remove(newTab.id); } catch { /* ignore */ }
+    }
+  }
+
+  const finalResult = { url: urlInput, step1, step2, step3: { detection } };
+  await addRuleTest(finalResult);
+  renderTestResult(finalResult);
 }
 
 function renderTestResult(result) {
@@ -510,80 +609,107 @@ function renderTestResult(result) {
     return;
   }
 
+  const stepCard = (stepNum, stepTitle, ok, body, extra) => `
+    <div style="margin-top:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:${ok ? 'var(--success-color)' : 'var(--danger-color)'};color:white;">${stepNum}</span>
+        <span style="font-weight:600;font-size:14px;color:var(--text-primary);">${stepTitle}</span>
+        <span style="font-size:12px;color:${ok ? 'var(--success-color)' : 'var(--danger-color)'};margin-left:4px;">${ok ? '✅ 通过' : '❌ 失败'}</span>
+      </div>
+      <div style="margin-left:30px;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-sm);font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        ${body}
+        ${extra ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-color);">${extra}</div>` : ''}
+      </div>
+    </div>`;
+
   let html = '';
-  const cardHeader = (title, icon = '📋') => `<div style="font-weight:600;font-size:14px;color:var(--text-primary);margin-bottom:8px;">${icon} ${title}</div>`;
+  html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">📍 测试URL：<code style="background:var(--bg-secondary);padding:1px 6px;border-radius:4px;">${result.url || '-'}</code></div>`;
 
-  if (result.staticOnly) {
-    html += `<div style="padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-md);font-size:13px;color:#92400e;margin-bottom:12px;">
-      ℹ️ ${result.hint || ''}
-    </div>`;
-  }
-
-  html += `<div style="padding:14px 16px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-md);">`;
-  html += cardHeader('基本信息', '🔗');
-  html += `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:4px;"><b>URL：</b>${result.url || '-'}</div>`;
-  html += `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;"><b>域名：</b>${result.hostname || '-'}</div>`;
-
-  html += `<div style="border-top:1px dashed var(--border-color);padding-top:10px;margin-top:6px">`;
-  html += cardHeader('规则匹配', '🎯');
-  if (result.matchedRule) {
-    html += `<div style="padding:8px 12px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:var(--radius-sm);font-size:13px;">
-      ✅ 匹配规则：<b>${result.matchedRule.name}</b>（ID: ${result.matchedRule.id}）
-    </div>`;
-    if (result.ruleSelectors) {
-      html += `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">
-        <div><b>标题选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.title}</code></div>
-        <div style="margin-top:4px"><b>季集选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.episode}</code></div>
-        <div style="margin-top:4px"><b>进度选择器：</b><code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">${result.ruleSelectors.progress}</code></div>
-      </div>`;
-    }
-  } else {
-    html += `<div style="padding:8px 12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);font-size:13px;color:#991b1b;">
-      ❌ 没有匹配的规则
-    </div>`;
-  }
-  html += `</div>`;
-
-  if (result.detection) {
-    html += `<div style="border-top:1px dashed var(--border-color);padding-top:10px;margin-top:10px">`;
-    html += cardHeader('实际识别结果', '🔍');
-
-    const renderField = (label, fieldResult, parser) => {
-      if (!fieldResult) return '';
-      if (fieldResult.success) {
-        const val = parser ? parser(fieldResult.value) : (typeof fieldResult.value === 'string' ? fieldResult.value : JSON.stringify(fieldResult.value));
-        return `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(34,197,94,0.06);border-radius:4px;">
-          <b>${label}：</b><span style="color:var(--success-color);">${val}</span>
-          ${fieldResult.selector ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">匹配选择器：<code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${fieldResult.selector}</code>${fieldResult.fallback ? '（回退默认）' : ''}</div>` : ''}
-        </div>`;
-      } else {
-        return `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(239,68,68,0.05);border-radius:4px;">
-          <b>${label}：</b><span style="color:#991b1b;">❌ 失败</span>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">原因：${fieldResult.reason || '未知'}</div>
+  if (result.step1) {
+    const s = result.step1;
+    let body = `<div><b>域名：</b>${s.hostname || '-'}</div>`;
+    if (s.matchedRule) {
+      body += `<div style="margin-top:4px;"><b>命中规则：</b><span style="color:var(--success-color);font-weight:600">${s.matchedRule.name}</span>（ID: ${s.matchedRule.id}）</div>`;
+      if (s.ruleSelectors) {
+        body += `<div style="margin-top:6px;">
+          <div><b>标题选择器：</b><code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${s.ruleSelectors.title}</code></div>
+          <div style="margin-top:2px;"><b>季集选择器：</b><code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${s.ruleSelectors.episode}</code></div>
+          <div style="margin-top:2px;"><b>进度选择器：</b><code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${s.ruleSelectors.progress}</code></div>
         </div>`;
       }
-    };
-
-    html += renderField('标题', result.detection.title);
-    html += renderField('季集文本', result.detection.episode);
-    if (result.detection.season || result.detection.episodeNum) {
-      html += `<div style="font-size:13px;margin-top:4px;padding:6px 10px;background:rgba(59,130,246,0.06);border-radius:4px;">
-        <b>解析季/集：</b>第${result.detection.season || '?'}季 / 第${result.detection.episodeNum || '?'}集
-      </div>`;
     }
-    html += renderField('播放进度', result.detection.progress, v => {
-      if (!v) return '无';
-      const fmt = s => {
-        if (!s) return '00:00';
-        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
-        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-      };
-      return `${fmt(v.currentTime)} / ${fmt(v.duration)}${v.duration ? ` (${Math.round(v.currentTime / v.duration * 100)}%)` : ''}`;
-    });
-    html += `</div>`;
+    let extra;
+    if (!s.success) {
+      extra = `<div style="color:var(--danger-color);"><b>下一步建议：</b>到上方添加该域名的自定义站点规则，配置标题/季集/进度选择器后再测。</div>`;
+    }
+    html += stepCard(1, '域名匹配', s.success, body, extra);
   }
 
-  html += `</div>`;
+  if (result.step2) {
+    const s = result.step2;
+    let body = '';
+    if (s.skipped) body = `<div>${s.hint || '已跳过'}</div>`;
+    else if (s.success) body = `<div>${s.mode || '页面访问成功'}</div>`;
+    else body = `<div style="color:var(--danger-color);">${s.hint || '访问失败'}</div>`;
+    let extra;
+    if (!s.success && !s.skipped) {
+      extra = `<div style="color:var(--warning-color);"><b>下一步建议：</b>1）先手动打开该页面，确认可以正常访问后再点「测试当前页」；2）如果站点需要登录，请先在该页面登录后再测；3）如果是纯动态渲染站点，可适当增加等待或在「测试当前页」里直接测。</div>`;
+    }
+    html += stepCard(2, '页面读取', !!s.success, body, extra);
+  }
+
+  if (result.step3) {
+    const s = result.step3;
+    const detect = s.detection;
+    const ok = detect && (detect.title?.success || detect.pageTitle);
+    let body = '';
+    let extra = '';
+
+    if (!detect) {
+      body = `<div style="color:var(--text-muted);">因前一步未通过，已跳过选择器识别。</div>`;
+    } else {
+      const renderField = (label, fieldResult, parser) => {
+        if (!fieldResult) return '';
+        if (fieldResult.success) {
+          const val = parser ? parser(fieldResult.value) : (typeof fieldResult.value === 'string' ? fieldResult.value : JSON.stringify(fieldResult.value));
+          return `<div style="margin-top:5px;padding:5px 8px;background:rgba(34,197,94,0.06);border-radius:4px;">
+            <b>${label}：</b><span style="color:var(--success-color);">${val}</span>
+            ${fieldResult.selector ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">命中选择器：<code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;">${fieldResult.selector}</code>${fieldResult.fallback ? '（回退默认）' : ''}</div>` : ''}
+          </div>`;
+        } else {
+          return `<div style="margin-top:5px;padding:5px 8px;background:rgba(239,68,68,0.05);border-radius:4px;">
+            <b>${label}：</b><span style="color:#991b1b;">❌ 未命中</span>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">原因：${fieldResult.reason || '未知'}</div>
+          </div>`;
+        }
+      };
+
+      body += renderField('标题', detect.title);
+      body += renderField('季集文本', detect.episode);
+      if (detect.season || detect.episodeNum) {
+        body += `<div style="margin-top:5px;padding:5px 8px;background:rgba(59,130,246,0.06);border-radius:4px;"><b>解析季/集：</b>第${detect.season || '?'}季 / 第${detect.episodeNum || '?'}集</div>`;
+      }
+      body += renderField('播放进度', detect.progress, v => {
+        if (!v) return '无';
+        const fmt = s => {
+          if (!s) return '00:00';
+          const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+          return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+        };
+        return `${fmt(v.currentTime)} / ${fmt(v.duration)}${v.duration ? ` (${Math.round(v.currentTime / v.duration * 100)}%)` : ''}`;
+      });
+      if (detect.pageTitle) {
+        body += `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">（document.title：${detect.pageTitle || '-'}）</div>`;
+      }
+
+      const allFail = detect.title && !detect.title.success && detect.episode && !detect.episode.success;
+      if (allFail) {
+        extra = `<div style="color:var(--warning-color);"><b>下一步建议：</b>打开 DevTools → Elements 面板，用 document.querySelector 手动检查你写的选择器是否能找到元素；若页面是 iframe 内播放，请把选择器写在 iframe 所在文档层级。</div>`;
+      }
+    }
+    html += stepCard(3, '选择器命中', ok, body, extra);
+  }
+
   container.innerHTML = html;
 }
 

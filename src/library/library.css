@@ -682,3 +682,117 @@
   max-height: 60px;
   overflow-y: auto;
 }
+
+.timeline-collapsible .timeline-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.timeline-collapsible .timeline-toggle:hover {
+  background: rgba(59, 130, 246, 0.04);
+  border-radius: var(--radius-sm);
+  margin: -2px -4px;
+  padding: 2px 4px;
+}
+
+.timeline-caret {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.timeline-collapsible.expanded .timeline-caret {
+  transform: rotate(180deg);
+}
+
+.timeline-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+}
+
+.timeline-collapsible .timeline-changes,
+.timeline-collapsible .timeline-snapshot-wrapper {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.2s ease;
+}
+
+.timeline-collapsible.expanded .timeline-changes {
+  max-height: 200px;
+  opacity: 1;
+  margin-top: 6px;
+}
+
+.timeline-collapsible.expanded .timeline-snapshot-wrapper {
+  max-height: 600px;
+  opacity: 1;
+  margin-top: 10px;
+}
+
+.timeline-snapshot-wrapper {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.timeline-snapshot-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.timeline-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 14px;
+}
+
+.timeline-snap-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border-color);
+}
+
+.timeline-snap-row:last-child,
+.timeline-snap-row:nth-last-child(2) {
+  border-bottom: none;
+}
+
+.timeline-snap-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.timeline-snap-value {
+  color: var(--text-secondary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.timeline-snap-row.changed .timeline-snap-value {
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.timeline-snap-row.changed .timeline-snap-label::before {
+  content: '●';
+  color: var(--primary-color);
+  margin-right: 3px;
+  font-size: 10px;
+  vertical-align: middle;
+}
